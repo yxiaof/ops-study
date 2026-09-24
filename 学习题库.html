@@ -2137,6 +2137,7 @@ const SYNC=(function(){
         await push();        /* 不带 force：云端较新时弹窗问用户，避免把另一台设备的进度直接覆盖掉 */
         el("syncState").innerHTML=stateLine();
         alert("已启用云同步。\n\n之后会自动上传，不用再管。\n换设备时重复这一步：填同一把令牌，点「保存并启用」。");
+        closePanel();   /* 成功即收面板，不用用户再点一次「关闭」 */
       }catch(e){
         cfg=prev; saveCfg();  /* 失败就还原，别把错的地址留在本机 */
         el("syncState").innerHTML=stateLine();
@@ -2158,6 +2159,7 @@ const SYNC=(function(){
       await push();
       el("syncState").innerHTML=stateLine();
       alert("云同步已启用。\n\n之后自动上传，不用再管。\n换设备时：填同一把令牌、第 2 栏留空，点「保存并启用」，就能接上同一份记录。");
+      closePanel();   /* 成功即收面板，不用用户再点一次「关闭」 */
     }catch(e){ stat("启用失败："+(e&&e.message||e),"err"); alert("启用失败："+(e&&e.message||e)+"\n\n常见原因：令牌没勾 Gists 权限，或已过期；也可能是网络暂时不通。"); }
   }
   function bindUI(){
@@ -2173,6 +2175,7 @@ const SYNC=(function(){
       stat("云同步未开启");
       el("syncToken").value=""; el("syncGist").value=""; el("syncState").innerHTML=stateLine(); el("syncAdv").style.display="none";
       alert("已断开。");
+      closePanel();
     };
     document.addEventListener("visibilitychange",function(){ if(document.visibilityState==="hidden") flush(); });
     window.addEventListener("pagehide",flush);
