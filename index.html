@@ -115,7 +115,8 @@
     <h3>令牌怎么拿</h3>
     <ol>
       <li>打开 GitHub → 头像 → <b>Settings</b> → 左侧最下 <b>Developer settings</b> → <b>Personal access tokens</b> → <b>Fine-grained tokens</b> → <b>Generate new token</b></li>
-      <li>有效期选 <b>90 days</b>；在 <b>Account permissions</b> 里只把 <b>Gists</b> 改成 <b>Read and write</b>，其余一律保持 No access</li>
+      <li>有效期选 <b>90 days</b>；点 <b>+ Add permissions</b> → 在下拉里找 <b>Account permissions</b>
+        分组（<b>不是</b> Repository permissions）→ 把 <b>Gists</b> 改成 <b>Read and write</b>，其余保持 No access</li>
       <li>生成后复制那串以 <code>github_pat_</code> 开头的字符，粘到任意一份页面的同步面板里</li>
     </ol>
     <p style="margin:10px 0 0;font-size:12.5px;color:var(--sub)">
