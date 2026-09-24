@@ -124,9 +124,20 @@
   </section>
 
   <section class="panel docs">
-    <h3>设计源文档</h3>
+    <h3>使用说明与设计文档</h3>
+    <a href="使用说明.md"><b>使用说明.md</b>（日常用法 · 故障排查 · 隐私边界）</a>
     <a href="运维岗位分阶段学习实施方案.md">运维岗位分阶段学习实施方案.md</a>
     <a href="运维题库考点蓝图.md">运维题库考点蓝图.md</a>
+  </section>
+
+  <section class="panel">
+    <h3>本页网址（加书签 / 加到手机桌面用）</h3>
+    <p style="margin:0;font-size:13.5px">
+      <code id="siteUrl">https://yxiaof.github.io/ops-study/</code>
+      <button type="button" id="btnCopyUrl"
+        style="margin-left:8px;padding:4px 12px;border:1px solid var(--line);background:#fff;
+        border-radius:7px;font-size:12.5px;cursor:pointer;color:var(--blue)">复制网址</button>
+    </p>
   </section>
 
 </div>
@@ -165,6 +176,23 @@
   setS('s-map',  syncOf('opsmap_sync'));
   setS('s-bg',   syncOf('opsbgw_sync'));
   setS('s-quiz', syncOf('opsquiz_sync'));
+
+  var b=document.getElementById('btnCopyUrl');
+  if(b) b.addEventListener('click', function(){
+    var t=document.getElementById('siteUrl').textContent.trim();
+    function done(){ b.textContent='已复制 ✓'; setTimeout(function(){ b.textContent='复制网址'; },1600); }
+    if(navigator.clipboard&&navigator.clipboard.writeText){
+      navigator.clipboard.writeText(t).then(done, function(){ fallback(); });
+    } else { fallback(); }
+    function fallback(){
+      try{
+        var ta=document.createElement('textarea'); ta.value=t;
+        ta.style.position='fixed'; ta.style.opacity='0';
+        document.body.appendChild(ta); ta.select(); document.execCommand('copy');
+        document.body.removeChild(ta); done();
+      }catch(e){}
+    }
+  });
 })();
 </script>
 </body>
