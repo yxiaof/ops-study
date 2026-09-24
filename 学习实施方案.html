@@ -2228,11 +2228,17 @@ python check_hosts.py --timeout 1     # 参数生效？输出文件有了吗？
       var tk=el('syncToken').value.trim(), gid=el('syncGist').value.trim();
       if(!tk){alert('请先粘贴令牌（github_pat_ 开头的那一串）。');return Promise.resolve()}
       if(gid){
+        var prev=cfg;
         cfg={gist:gid,token:tk};saveCfg();
         stat('已开启 · 检查云端…','busy');el('syncState').innerHTML=stateLine();
-        return pull(false).then(function(){return push({force:true})}).then(function(){
+        return getRemote().then(function(){return push({force:true})}).then(function(){
           el('syncState').innerHTML=stateLine();
           alert('已启用云同步。\n\n之后会自动上传，不用再管。\n换设备时重复这一步：填同一把令牌，点「保存并启用」。');
+        }).catch(function(e){
+          cfg=prev;saveCfg();  /* 失败就还原，别把错的地址留在本机 */
+          el('syncState').innerHTML=stateLine();
+          stat('启用失败 · 配置已还原','err');
+          alert('启用失败：'+((e&&e.message)||e)+'\n\n最常见的原因：\n· 第 2 栏「进度柜子地址」填错了 —— 新用户请把这一栏【完全清空】，让系统自动帮您建一个\n· 令牌没勾 Gists 权限，或已过期\n· 网络暂时不通，稍后再试');
         });
       }
       if(!confirm('还没有「进度柜子」的地址。\n\n是否用这把令牌自动创建一个？（推荐，约 3 秒）'))return Promise.resolve();
@@ -2279,7 +2285,11 @@ python check_hosts.py --timeout 1     # 参数生效？输出文件有了吗？
     return{boot:boot,mark:mark,push:push,pull:pull,open:openPanel};
   })();
 
-  SYNC.boot();
+  /* 2026-09-24 修复：同步面板的 DOM 在本脚本之后才解析，直接 SYNC.boot() 会让 bindUI()
+     找不到面板内的按钮（保存并启用 / 关闭 / 立即上传…），表现为"点了没反应"。
+     改为等 DOM 就绪后再启动。 */
+  if(document.readyState==='loading'){ document.addEventListener('DOMContentLoaded',function(){SYNC.boot()}); }
+  else{ SYNC.boot(); }
 })();
 </script>
 <div id="manual-overlay"><div id="manual-bar"><span class="t">🏢 云客智能 · 实操手册（S1-S9 + E1-E3/E9）</span><button onclick="closeManual()">✕ 关闭手册</button></div><div id="manual-scroll"></div></div><div id="lab-overlay" style="display:none;position:fixed;inset:0;z-index:1100;background:rgba(15,23,42,.55)"><div style="display:flex;justify-content:space-between;align-items:center;background:linear-gradient(135deg,#0f766e,#0891b2);color:#fff;padding:10px 18px;position:absolute;top:0;left:0;right:0"><span style="font-weight:700;font-size:15px">🧪 运维岗位方向实验包（P1-P6，覆盖 21 项方向技能）</span><button onclick="closeLab()" style="background:rgba(255,255,255,.22);border:none;color:#fff;border-radius:8px;padding:6px 16px;cursor:pointer;font-size:14px;font-family:inherit">✕ 关闭</button></div><div id="lab-scroll" style="position:absolute;top:50px;bottom:0;left:0;right:0;overflow:auto;background:#f5f6f8"></div></div><div id="net-overlay" style="display:none;position:fixed;inset:0;z-index:1100;background:rgba(15,23,42,.55)"><div style="display:flex;justify-content:space-between;align-items:center;background:linear-gradient(135deg,#1e40af,#0891b2);color:#fff;padding:10px 18px;position:absolute;top:0;left:0;right:0"><span style="font-weight:700;font-size:15px">☁️ 云上互通与网络（官方文档佐证版）</span><button onclick="closeNet()" style="background:rgba(255,255,255,.22);border:none;color:#fff;border-radius:8px;padding:6px 16px;cursor:pointer;font-size:14px;font-family:inherit">✕ 关闭</button></div><div id="net-scroll" style="position:absolute;top:50px;bottom:0;left:0;right:0;overflow:auto;background:#f5f6f8"></div></div><div id="toast"></div>
@@ -4968,8 +4978,8 @@ ping -c 3 第2台私网IP
   <div class="state" id="syncState"></div>
   <label>1. 令牌（钥匙）</label>
   <input type="text" id="syncToken" placeholder="github_pat_ 开头的一长串" autocomplete="off" spellcheck="false">
-  <label>2. 进度柜子地址（新手留空即可，会自动帮你建一个）</label>
-  <input type="text" id="syncGist" placeholder="留空 = 自动帮我建一个" autocomplete="off" spellcheck="false">
+  <label>2. 进度柜子地址（<b>新用户请完全留空</b>，系统会自动帮您建一个）</label>
+  <input type="text" id="syncGist" placeholder="新用户不用填，留空即可" autocomplete="off" spellcheck="false">
   <div class="row">
     <button class="btn primary" id="syncEnable">保存并启用</button>
     <button class="btn" id="syncClose">关闭</button>

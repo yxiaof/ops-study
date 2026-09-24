@@ -2117,12 +2117,20 @@ const SYNC=(function(){
     const tk=el("syncToken").value.trim(), gid=el("syncGist").value.trim();
     if(!tk){ alert("请先粘贴令牌（github_pat_ 开头的那一串）。"); return; }
     if(gid){
+      const prev=cfg;
       cfg={gist:gid,token:tk}; saveCfg();
       stat("已开启 · 检查云端…","busy"); el("syncState").innerHTML=stateLine();
-      await pull(false);
-      await push({force:true});
-      el("syncState").innerHTML=stateLine();
-      alert("已启用云同步。\n\n之后会自动上传，不用再管。\n换设备时重复这一步：填同一把令牌，点「保存并启用」。");
+      try{
+        await getRemote();   /* 先确认这个柜子真的存在、令牌真的能用，再宣告成功 */
+        await push({force:true});
+        el("syncState").innerHTML=stateLine();
+        alert("已启用云同步。\n\n之后会自动上传，不用再管。\n换设备时重复这一步：填同一把令牌，点「保存并启用」。");
+      }catch(e){
+        cfg=prev; saveCfg();  /* 失败就还原，别把错的地址留在本机 */
+        el("syncState").innerHTML=stateLine();
+        stat("启用失败 · 配置已还原","err");
+        alert("启用失败："+(e&&e.message||e)+"\n\n最常见的原因：\n· 第 2 栏「进度柜子地址」填错了 —— 新用户请把这一栏【完全清空】，让系统自动帮您建一个\n· 令牌没勾 Gists 权限，或已过期\n· 网络暂时不通，稍后再试");
+      }
       return;
     }
     if(!confirm("还没有「进度柜子」的地址。\n\n是否用这把令牌自动创建一个？（推荐，约 3 秒）")) return;
@@ -2170,7 +2178,11 @@ const SYNC=(function(){
 initStats();
 renderAll();
 embedBoot();
-SYNC.boot();
+/* 2026-09-24 修复：同步面板的 DOM 在本脚本之后才解析，直接 SYNC.boot() 会让
+   bindUI() 找不到面板内的按钮（保存并启用 / 关闭 / 立即上传…），表现为"点了没反应"。
+   改为等 DOM 就绪后再启动。 */
+if(document.readyState==="loading"){ document.addEventListener("DOMContentLoaded",function(){ SYNC.boot(); }); }
+else{ SYNC.boot(); }
 </script>
 <script type="application/json" id="embedded-progress">{"app":"opsquiz","version":2,"savedAt":"2026-09-20T03:41:31.987Z","data":{"a":{"M1-01":{"sel":[2],"ok":true,"ts":1789748278785},"M1-02":{"sel":[1],"ok":true,"ts":1789748326228},"M1-03":{"sel":[0],"ok":true,"ts":1789748655513},"M1-04":{"sel":[0],"ok":true,"ts":1789750132622},"M1-05":{"sel":[3],"ok":true,"ts":1789750238897},"M1-06":{"sel":[1],"ok":true,"ts":1789752725465},"M2-01":{"sel":[2],"ok":true,"ts":1789791170866},"M3-01":{"sel":[0],"ok":false,"ts":1789791218000},"M4-01":{"sel":[0],"ok":true,"ts":1789791275413},"M5-01":{"sel":[3],"ok":true,"ts":1789791315382},"M6-01":{"sel":[1],"ok":true,"ts":1789791369807},"M7-01":{"sel":[1],"ok":true,"ts":1789791450593},"M8-01":{"sel":[1],"ok":true,"ts":1789791487059},"M9-01":{"sel":[0],"ok":true,"ts":1789791527524},"M10-01":{"sel":[1],"ok":true,"ts":1789791586418},"M11-01":{"sel":[3],"ok":true,"ts":1789791634441},"M1-07":{"sel":[1,0,2],"ok":true,"ts":1789791710810},"M2-02":{"sel":[0,1,2,3],"ok":true,"ts":1789791817079},"M3-02":{"sel":[2],"ok":false,"ts":1789791958869},"M4-02":{"sel":[0],"ok":true,"ts":1789792043504},"M5-02":{"sel":[1],"ok":true,"ts":1789792177887},"M6-02":{"sel":[1],"ok":true,"ts":1789792246909},"M7-02":{"sel":[0],"ok":true,"ts":1789792296093},"M8-02":{"sel":[0],"ok":true,"ts":1789792420237},"M9-02":{"sel":[1],"ok":false,"ts":1789792496638},"M10-02":{"sel":[3],"ok":true,"ts":1789792577435},"M11-02":{"sel":[1],"ok":true,"ts":1789869897180},"M2-03":{"sel":[1],"ok":true,"ts":1789869956944},"M3-03":{"sel":[2],"ok":false,"ts":1789870012181},"M4-03":{"sel":[0],"ok":false,"ts":1789870163380},"M5-03":{"sel":[2],"ok":true,"ts":1789870243046},"M6-03":{"sel":[3],"ok":true,"ts":1789870283482},"M7-03":{"sel":[1],"ok":true,"ts":1789870478439},"M8-03":{"sel":[3],"ok":true,"ts":1789870510385},"M9-03":{"sel":[0],"ok":true,"ts":1789870579792},"M10-03":{"sel":[1],"ok":true,"ts":1789870658051},"M1-08":{"sel":[1],"ok":false,"ts":1789870826729},"M11-03":{"sel":[2],"ok":true,"ts":1789870870724},"M2-04":{"sel":[1],"ok":false,"ts":1789870964036},"M3-04":{"sel":[1],"ok":true,"ts":1789871041081},"M4-04":{"sel":[0],"ok":true,"ts":1789871111026},"M5-04":{"sel":[4,3,2,0],"ok":true,"ts":1789871275858},"M6-04":{"sel":[0],"ok":true,"ts":1789871468234},"M7-04":{"sel":[2],"ok":true,"ts":1789871766538},"M8-04":{"sel":[1],"ok":true,"ts":1789871823329},"M9-04":{"sel":[0],"ok":false,"ts":1789871943024}},"wrong":{"M3-01":1,"M3-02":1,"M9-02":1,"M3-03":1,"M4-03":1,"M1-08":1,"M2-04":1,"M9-04":1},"exam":[],"srs":{"M3-01":{"next":1789877618000,"stage":0},"M3-02":{"next":1789878358869,"stage":0},"M9-02":{"next":1789878896638,"stage":0},"M3-03":{"next":1789956412181,"stage":0},"M4-03":{"next":1789956563380,"stage":0},"M1-08":{"next":1789957226729,"stage":0},"M2-04":{"next":1789957364036,"stage":0},"M9-04":{"next":1789958343024,"stage":0}},"stats":{"daily":{"2026-09-19":20,"2026-09-20":20},"goal":20,"snap":{"2026-09-19":{"a":6,"w":0},"2026-09-20":{"a":46,"w":8}}},"flags":{}}}</script>
 <div class="syncmask" id="syncMask"></div>
@@ -2180,8 +2192,8 @@ SYNC.boot();
   <div class="state" id="syncState"></div>
   <label>1. 令牌（钥匙）</label>
   <input type="text" id="syncToken" placeholder="github_pat_ 开头的一长串" autocomplete="off" spellcheck="false">
-  <label>2. 进度柜子地址（新手留空即可，会自动帮你建一个）</label>
-  <input type="text" id="syncGist" placeholder="留空 = 自动帮我建一个" autocomplete="off" spellcheck="false">
+  <label>2. 进度柜子地址（<b>新用户请完全留空</b>，系统会自动帮您建一个）</label>
+  <input type="text" id="syncGist" placeholder="新用户不用填，留空即可" autocomplete="off" spellcheck="false">
   <div class="row">
     <button class="btn primary" id="syncEnable">保存并启用</button>
     <button class="btn" id="syncClose">关闭</button>
