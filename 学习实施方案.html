@@ -2072,7 +2072,7 @@ python check_hosts.py --timeout 1     # 参数生效？输出文件有了吗？
     var PEND='opsmap_pend';    /* 待补传标记 */
     var FILE='map.json';       /* 云端文件名：三份文件各一个，互不覆盖 */
     var ROOT='https://api.github.com/gists';
-    var DEB=30000, MAXW=300000, TOL=300000;
+    var DEB=30000, MAXW=300000;
     var DEV=(function(){try{var d=localStorage.getItem('opssync_dev');if(!d){d='d'+Date.now().toString(36)+Math.random().toString(36).slice(2,6);localStorage.setItem('opssync_dev',d);}return d}catch(e){return 'd?'}})();
     var cfg=null, debT=null, maxT=null, firstMark=0, inflight=false, again=false, quiet=false;
 
@@ -2104,11 +2104,49 @@ python check_hosts.py --timeout 1     # 参数生效？输出文件有了吗？
       try{
         store=p.data||{};
         try{localStorage.setItem(KEY,JSON.stringify(store))}catch(e){}
-        writeChg((p.src&&p.src.t)||Date.now());
+        var t0=(p&&p.src&&p.src.t)||0; if(t0>readChg())writeChg(t0);
         paintAll();
       }finally{quiet=false}
     }
-    function newer(c,l){if(!c||!c.n)return false;if(!l||!l.n)return true;if(c.n!==l.n)return c.n>l.n;return c.t>l.t+TOL}
+
+    /* ---------- 合并：两台设备各改各的，按项取并集，而不是整份互相覆盖 ----------
+       对象→逐键递归；数组→并集去重；数字→取大；布尔→或；空值→让位；其余→取本机。
+       这套进度只增不减（打卡性质），并集是安全语义；
+       要「用本机强制覆盖云端」走「立即上传」按钮（force）。 */
+    function stable(v){
+      if(v===null||typeof v!=='object')return JSON.stringify(v);
+      if(Array.isArray(v))return '['+v.map(stable).join(',')+']';
+      var ks=Object.keys(v).sort(),o=[];
+      for(var i=0;i<ks.length;i++)o.push(JSON.stringify(ks[i])+':'+stable(v[ks[i]]));
+      return '{'+o.join(',')+'}';
+    }
+    function mergeVal(mine,theirs){
+      if(theirs===undefined)return mine;
+      if(mine===undefined||mine===null||mine==='')return theirs;
+      if(typeof mine==='object'&&typeof theirs==='object'){
+        if(Array.isArray(mine)&&Array.isArray(theirs)){
+          var seen={},out=[];
+          mine.concat(theirs).forEach(function(x){var k=stable(x);if(!seen[k]){seen[k]=1;out.push(x)}});
+          return out;
+        }
+        if(Array.isArray(mine)!==Array.isArray(theirs))return mine;
+        var r={},k;
+        for(k in theirs)r[k]=theirs[k];
+        for(k in mine)r[k]=mergeVal(mine[k],r[k]);
+        return r;
+      }
+      if(typeof mine==='number'&&typeof theirs==='number')return Math.max(mine,theirs);
+      if(typeof mine==='boolean'&&typeof theirs==='boolean')return mine||theirs;
+      return mine;
+    }
+    /* 把云端进度并进本机；返回 true 表示本机内容确实变了 */
+    function mergeInto(remoteData){
+      var before=store||{};
+      var merged=mergeVal(before,remoteData||{});
+      if(stable(merged)===stable(before))return false;
+      applyRemote({data:merged});
+      return true;
+    }
     function enqueue(){try{localStorage.setItem(PEND,'1')}catch(e){}}
     function dequeue(){try{localStorage.removeItem(PEND)}catch(e){}}
     function hasPend(){try{return localStorage.getItem(PEND)==='1'}catch(e){return false}}
@@ -2161,36 +2199,40 @@ python check_hosts.py --timeout 1     # 参数生效？输出文件有了吗？
       });
     }
 
-    /* ---------- 拉取 ---------- */
+    /* ---------- 拉取（合并式：云端与本机取并集，谁也不覆盖谁） ---------- */
     function pull(manual){
       if(!ready())return Promise.resolve();
       stat('正在检查云端…','busy');
       return getRemote().then(function(cloud){
         var ls=probe();
-        if(!cloud){stat(ls.n?('已就绪 · 本机 '+ls.n+' 项'):'云端还是空的','ok');if(manual)alert('云端还没有进度。\n先在任意一台设备上点「立即上传」把本机进度送上去。');return}
+        if(!cloud){
+          stat(ls.n?('已就绪 · 本机 '+ls.n+' 项'):'云端还是空的','ok');
+          if(manual)alert('云端还没有进度。\n先在任意一台设备上点「立即上传」把本机进度送上去。');
+          return;
+        }
         var cs=sigOf(cloud);
-        if(!newer(cs,ls)){stat('已是最新（'+ls.n+' 项）','ok');if(manual)alert('本机已经是最新的：已记录 '+ls.n+' 项。\n云端记录：'+cs.n+' 项。');return}
-        if(manual&&!confirm('云端有一份更新的进度（'+cs.n+' 项）。\n\n载入后会用云端记录覆盖本机当前记录，继续吗？')){stat('已保留本机记录','busy');return}
-        applyRemote(cloud);
+        if(!mergeInto(cloud.data||{})){
+          stat('两边已一致（'+ls.n+' 项）','ok');
+          if(manual)alert('本机与云端已经一致：'+ls.n+' 项，没有需要合并的内容。');
+          return;
+        }
         cfg.lastDown=nowIso();saveCfg();
-        stat('已从云端载入 '+cs.n+' 项','ok');
-        if(manual)alert('已载入云端进度：共 '+cs.n+' 项。');
+        var now=probe();
+        stat('已合并云端进度 · 本机 '+now.n+' 项','ok');
+        if(manual)alert('已与云端合并：本机现有 '+now.n+' 项（云端 '+cs.n+' 项）。');
+        /* 本机并集比云端多时顺手补传一次，让另一台设备也能拿到 */
+        if(now.n>cs.n)return push();
       }).catch(function(e){stat('读取云端失败：'+((e&&e.message)||e),'err')});
     }
 
-    /* ---------- 上传 ---------- */
+    /* ---------- 上传（默认先把云端改动并进来，再上传并集，避免覆盖另一台设备） ---------- */
     function push(o){
       o=o||{};
       if(!ready()||inflight){if(inflight)again=true;return Promise.resolve()}
       inflight=true;
       return getRemote().catch(function(){return null}).then(function(cloud){
-        var ls=probe(), cs=sigOf(cloud);
-        if(cloud&&newer(cs,ls)&&!o.force){
-          if(!ls.n)return pull(false);      /* 本机还是空的（新设备首次接入）→ 直接采用云端记录，不必打扰用户 */
-          stat('云端有更新，待你选择','busy');
-          var useMine=confirm('云端有一份更新的进度（'+cs.n+' 项）。\n本机：'+ls.n+' 项。\n\n点「确定」= 用本机记录覆盖云端\n点「取消」= 放弃上传，改用云端记录');
-          if(!useMine)return pull(false);   /* 上面已经问过一遍，这里不再重复弹窗 */
-        }
+        if(cloud&&cloud.data&&!o.force) mergeInto(cloud.data);
+        var ls=probe();
         stat('正在上传…','busy');
         var payload=pack();
         return fetch(ROOT+'/'+encodeURIComponent(cfg.gist),{method:'PATCH',headers:hdr(),
@@ -2294,7 +2336,10 @@ python check_hosts.py --timeout 1     # 参数生效？输出文件有了吗？
         alert('已断开。');
         closePanel();
       };
-      document.addEventListener('visibilitychange',function(){if(document.visibilityState==='hidden')flush()});
+      document.addEventListener('visibilitychange',function(){
+        if(document.visibilityState==='hidden')flush();
+        else if(ready())pull(false);   /* 回到前台自动对一次账：另一台设备可能刚改过 */
+      });
       window.addEventListener('pagehide',flush);
     }
     function boot(){
@@ -5011,13 +5056,14 @@ ping -c 3 第2台私网IP
   <div id="syncAdv" style="display:none">
     <div class="row">
       <button class="btn" id="syncUp">立即上传</button>
-      <button class="btn" id="syncDown">从云端覆盖本机</button>
+      <button class="btn" id="syncDown">从云端拉取</button>
       <button class="btn warn" id="syncOff">断开</button>
     </div>
   </div>
   <div class="hint">
     <b>怎么拿令牌：</b>GitHub 头像 → Settings → Developer settings → Personal access tokens → Fine-grained tokens → Generate new token；有效期选 90 days；Account permissions 里只把 <b>Gists</b> 改成 Read and write，其余一律保持 No access；生成后复制那串字符。<br>
-    <b>换设备：</b>填同一把令牌，点「保存并启用」，再点一次「立即上传」。<br>
+    <b>换设备：</b>填同一把令牌，点「保存并启用」即可，进度会自动合并过来。<br>
+    <b>两台设备各勾各的：</b>会自动合并成一份，谁也不丢；只有点「立即上传」才会用本机强制覆盖云端。<br>
     <b>安全：</b>令牌只存在这台设备自己的浏览器里，不写进网页、不会公开。
   </div>
 </div>
