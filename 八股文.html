@@ -655,6 +655,22 @@ var SYNC=(function(){
     });
   }
 
+  /* 换设备接入时：先在自己的 Gist 列表里找已经建好的柜子，找到就直接接上，不用手抄地址。
+     找不到才创建新的 —— 避免每台设备各建一个柜子、彼此看不见。 */
+  function findGist(tk){
+    return fetch(ROOT+"?per_page=100",{headers:{"Accept":"application/vnd.github+json","Authorization":"Bearer "+tk}}).then(function(r){
+      if(!r.ok)return r.text().then(function(t){throw new Error("HTTP "+r.status+" "+String(t).slice(0,160));});
+      return r.json();
+    }).then(function(list){
+      if(!list||!list.length)return null;
+      for(var i=0;i<list.length;i++){
+        var d=(list[i]&&list[i].description)||"";
+        if(d.indexOf("进度中枢")>=0)return list[i];
+      }
+      return null;
+    });
+  }
+
   /* ---------- 拉取 ---------- */
   function pull(manual){
     if(!ready())return Promise.resolve();
@@ -684,9 +700,10 @@ var SYNC=(function(){
       cloud=c;
       var ls=probe(), cs=sigOf(cloud);
       if(cloud&&newer(cs,ls)&&!o.force){
+        if(!ls.n)return pull(false);   /* 本机还是空的（新设备首次接入）→ 直接采用云端记录，不必打扰用户 */
         stat("云端有更新，待你选择","busy");
         var useMine=confirm("云端有一份更新的进度（"+cs.n+" 条）。\n本机："+ls.n+" 条。\n\n点「确定」= 用本机记录覆盖云端\n点「取消」= 放弃上传，改用云端记录");
-        if(!useMine)return pull(true);
+        if(!useMine)return pull(false);   /* 上面已经问过一遍，这里不再重复弹窗 */
       }
       stat("正在上传…","busy");
       var payload=pack();
@@ -743,7 +760,7 @@ var SYNC=(function(){
       var prev=cfg;
       cfg={gist:gid,token:tk};saveCfg();
       stat("已开启 · 检查云端…","busy");el("syncState").innerHTML=stateLine();
-      return getRemote().then(function(){return push({force:true});}).then(function(){
+      return getRemote().then(function(){return push();}).then(function(){
         el("syncState").innerHTML=stateLine();
         alert("已启用云同步。\n\n之后会自动上传，不用再管。\n换设备时重复这一步：填同一把令牌，点「保存并启用」。");
       }).catch(function(e){
@@ -753,19 +770,23 @@ var SYNC=(function(){
         alert("启用失败："+((e&&e.message)||e)+"\n\n最常见的原因：\n· 第 2 栏「进度柜子地址」填错了 —— 新用户请把这一栏【完全清空】，让系统自动帮您建一个\n· 令牌没勾 Gists 权限，或已过期\n· 网络暂时不通，稍后再试");
       });
     }
-    if(!confirm("还没有「进度柜子」的地址。\n\n是否用这把令牌自动创建一个？（推荐，约 3 秒）"))return Promise.resolve();
-    stat("正在创建…","busy");
-    return createGist(tk).then(function(g){
-      cfg={gist:g.id,token:tk,created:nowIso()};saveCfg();
-      el("syncGist").value=g.id;el("syncAdv").style.display="";
+    if(!confirm("还没有「进度柜子」的地址。\n\n点「确定」= 自动帮你找一个（找不到就建），推荐，约 3 秒\n点「取消」= 先不动，我自己去填地址"))return Promise.resolve();
+    stat("正在查找已有柜子…","busy");
+    return findGist(tk).then(function(found){
+      if(found){stat("找到已有柜子，正在接上…","busy");return found.id;}
+      stat("没找到，正在创建…","busy");
+      return createGist(tk).then(function(g){return g.id;});
+    }).then(function(gid2){
+      cfg={gist:gid2,token:tk};saveCfg();
+      el("syncGist").value=gid2;el("syncAdv").style.display="";
       el("syncState").innerHTML=stateLine();
-      return push({force:true});
+      return push();
     }).then(function(){
       el("syncState").innerHTML=stateLine();
-      alert("进度柜子已创建并启用。\n\n之后自动上传，不用再管。\n换设备时：填同一把令牌，点「保存并启用」，再点一次「立即上传」即可。");
+      alert("云同步已启用。\n\n之后自动上传，不用再管。\n换设备时：填同一把令牌、第 2 栏留空，点「保存并启用」，就能接上同一份记录。");
     }).catch(function(e){
-      stat("创建失败："+((e&&e.message)||e),"err");
-      alert("创建失败："+((e&&e.message)||e)+"\n\n常见原因：令牌没勾 Gists 权限，或已过期。");
+      stat("启用失败："+((e&&e.message)||e),"err");
+      alert("启用失败："+((e&&e.message)||e)+"\n\n常见原因：令牌没勾 Gists 权限，或已过期；也可能是网络暂时不通。");
     });
   }
   function bindUI(){
