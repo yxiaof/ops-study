@@ -401,7 +401,18 @@ echo "exit code: $?"</code></pre>
       <details class="ans"><summary>操作要点</summary><div class="body">
         <b>①</b> 写 crontab：<code>crontab -e</code> 加一行 <code>*/20 * * * * /root/lab/env_check.sh &gt;&gt; /root/lab/logs/cron.log 2&gt;&amp;1</code> —— <code>*/20</code> 即每 20 分钟；保存后 <code>crontab -l</code> 复核。<br>
         <b>②</b> 验证真的在跑：等一个周期后 <code>tail -5 /root/lab/logs/cron.log</code> —— 预期出现新巡检输出；坑：cron 的 PATH 极简，脚本里命令尽量写绝对路径。<br>
-        <b>③</b> 告警雏形（包一层再判断），写 warn_run.sh：<code>OUT=$(/root/lab/env_check.sh); echo "$OUT" &gt;&gt; /root/lab/logs/cron.log; echo "$OUT" | grep -q WARN &amp;&amp; curl -s 钉钉webhook -H 'Content-Type: application/json' -d '{"msgtype":"text","text":{"content":"巡检出现 WARN"}}'</code> —— <code>grep -q</code> 无匹配返回非 0，<code>&amp;&amp;</code> 短路，只有出 WARN 才发。<br>
+        <b>③</b> 告警雏形（包一层再判断），写成完整脚本 warn_run.sh：
+        <pre class="cmd"><code>cat &gt; /root/lab/warn_run.sh &lt;&lt;'EOF'
+#!/usr/bin/env bash
+# 包一层：巡检结果落日志；出现 WARN 才发钉钉
+OUT=$(/root/lab/env_check.sh)
+echo "$OUT" &gt;&gt; /root/lab/logs/cron.log
+echo "$OUT" | grep -q WARN &amp;&amp; curl -s 钉钉webhook \
+  -H 'Content-Type: application/json' \
+  -d '{"msgtype":"text","text":{"content":"巡检出现 WARN"}}'
+EOF
+chmod +x /root/lab/warn_run.sh</code></pre>
+        —— <code>grep -q</code> 无匹配返回非 0，<code>&amp;&amp;</code> 短路，只有出 WARN 才发。<br>
         <b>④</b> 制造一次真告警：crontab 那行改成调 warn_run.sh，临时把阈值调成 1 等一个周期 —— 预期钉钉群收到消息，验证完改回。<br>
         <b>✅ 验收</b>：cron.log 按周期增长；调低阈值后 20 分钟内钉钉收到 WARN。这就是一次真实的"定时巡检"配置，直接写进简历。
       </div></details>
@@ -557,9 +568,23 @@ docker restart proxy &amp;&amp; curl -i --max-time 15 http://localhost:8082 | he
       <p><b>题 1</b>：写一条命令/小脚本，检查任何域名的证书离到期还有多少天，少于 30 天就输出告警。<code>openssl s_client -connect 域名:443</code> 的 notAfter 怎么和今天比？</p>
       <details class="ans"><summary>操作要点</summary><div class="body">
         <b>①</b> 先手工拿一次到期时间：<code>echo | openssl s_client -connect baidu.com:443 2&gt;/dev/null | openssl x509 -noout -enddate</code> —— 预期输出 <code>notAfter=Dec  1 12:00:00 2026 GMT</code> 这样的行。<br>
-        <b>②</b> 组装成脚本 cert_check.sh（核心三行）：<code>end=$(date -d "$(echo | openssl s_client -connect $1:443 2&gt;/dev/null | openssl x509 -noout -enddate | cut -d= -f2)" +%s)</code>；<code>days=$(( (end - $(date +%s)) / 86400 ))</code>；<code>[ $days -lt 30 ] &amp;&amp; echo "[WARN] $1 剩 $days 天" || echo "[OK] $1 剩 $days 天"</code>。<br>
-        <b>③</b> 验证：<code>./cert_check.sh baidu.com</code> —— 预期 3 秒内输出一行剩余天数；把 30 临时改成 9999 能看到 WARN 分支。<br>
-        <b>④</b> 多域名+定时化：把 $1 换成 <code>for d in $(cat domains.txt)</code> 循环，挂 crontab 每天跑（技能 2 题 3 同款）——这就是"证书到期监控"的最小实现，沙盘 S4 可升级为 Prometheus 告警。<br>
+        <b>②</b> 组装成完整脚本 cert_check.sh（逻辑就三步：拿 notAfter → <code>date -d</code> 转 epoch 秒 → 与 <code>date +%s</code> 相减除 86400 得天数）。⚠️ 注意要先建文件、<code>chmod +x</code> 后才能按 <code>./cert_check.sh 域名</code> 调用，直接把三行逻辑粘到终端是不行的（<code>$1</code> 只有在脚本里才有值）。完整版如下，可直接照抄：<br>
+        <pre class="cmd"><code>cat &gt; cert_check.sh &lt;&lt;'EOF'
+#!/usr/bin/env bash
+# 用法: ./cert_check.sh 域名 [域名2 ...] —— 证书剩余不足 30 天输出 WARN
+WARN_DAYS=30
+if [ $# -eq 0 ]; then echo "用法: $0 域名 [域名2 ...]"; exit 2; fi
+for host in "$@"; do
+  end=$(echo | timeout 10 openssl s_client -connect "$host:443" -servername "$host" 2&gt;/dev/null \
+        | openssl x509 -noout -enddate 2&gt;/dev/null | cut -d= -f2)
+  if [ -z "$end" ]; then echo "[ERR] $host 取不到证书（连不通/超时/非 HTTPS）"; continue; fi
+  days=$(( ($(date -d "$end" +%s) - $(date +%s)) / 86400 ))
+  [ "$days" -lt "$WARN_DAYS" ] &amp;&amp; echo "[WARN] $host 剩 $days 天" || echo "[OK] $host 剩 $days 天"
+done
+EOF
+chmod +x cert_check.sh</code></pre>
+        <b>③</b> 验证：<code>./cert_check.sh baidu.com</code> —— 预期 3 秒内输出一行剩余天数；<code>./cert_check.sh</code> 不带参数预期打印用法；把 <code>WARN_DAYS</code> 临时改成 9999 能看到 WARN 分支。<br>
+        <b>④</b> 多域名+定时化：<code>./cert_check.sh baidu.com github.com</code> 一次查多个；或 <code>./cert_check.sh $(cat domains.txt)</code>（每行一个域名），挂 crontab 每天跑（技能 2 题 3 同款）——这就是"证书到期监控"的最小实现，沙盘 S4 可升级为 Prometheus 告警。<br>
         <b>✅ 验收</b>：对任一 https 域名输出剩余天数，且 OK/WARN 两个分支都触发过一次。
       </div></details>
       <p><b>题 2</b>：观察一次真实网站的 HTTPS 全流程（如 <code>www.baidu.com:443</code>），指出证书链里有几级、由谁签发。</p>
@@ -1229,8 +1254,24 @@ sudo lynis audit system | tail -20</code></pre>
       <p><b>题 1</b>：写一个"证书到期监控"小脚本（复用技能 4 的 openssl 命令）：给一个域名列表，输出每个证书剩余天数，&lt;30 天标 WARN。</p>
       <details class="ans"><summary>操作要点</summary><div class="body">
         <b>①</b> 单域名先跑通（复用技能 4 题 1 的换算）：拿 notAfter → <code>date -d</code> 转 epoch → 与 <code>date +%s</code> 相减除 86400 得剩余天数。<br>
-        <b>②</b> 组装列表版 cert_watch.sh：<code>for d in $(cat domains.txt); do ... ; [ "$days" -lt 30 ] &amp;&amp; echo "[WARN] $d 剩 ${days} 天" || echo "[OK] $d 剩 ${days} 天"; done</code>；domains.txt 每行一个域名（公司/项目的域名都放进去）。<br>
-        <b>③</b> 边界处理：连不通/超时的域名要兜住输出 [ERR] 而不是让脚本中断——安全工具"半途而废"等于没有监控。<br>
+        <b>②</b> 组装列表版 cert_watch.sh（完整脚本：domains.txt 每行一个域名——公司/项目的域名都放进去；连不通的域名输出 [ERR] 不中断）：
+        <pre class="cmd"><code>printf 'baidu.com\nwww.qq.com\n' &gt; domains.txt
+cat &gt; cert_watch.sh &lt;&lt;'EOF'
+#!/usr/bin/env bash
+# 证书到期监控：读 domains.txt（每行一个域名），不足 30 天 WARN，取不到证书 ERR
+WARN_DAYS=30
+[ -f domains.txt ] || { echo "缺少 domains.txt"; exit 2; }
+while read -r d; do
+  [ -z "$d" ] &amp;&amp; continue
+  end=$(echo | timeout 10 openssl s_client -connect "$d:443" -servername "$d" 2&gt;/dev/null \
+        | openssl x509 -noout -enddate 2&gt;/dev/null | cut -d= -f2)
+  if [ -z "$end" ]; then echo "[ERR] $d 取不到证书"; continue; fi
+  days=$(( ($(date -d "$end" +%s) - $(date +%s)) / 86400 ))
+  [ "$days" -lt "$WARN_DAYS" ] &amp;&amp; echo "[WARN] $d 剩 $days 天" || echo "[OK] $d 剩 $days 天"
+done &lt; domains.txt
+EOF
+chmod +x cert_watch.sh &amp;&amp; ./cert_watch.sh</code></pre><br>
+        <b>③</b> 边界处理（脚本里的 <code>if [ -z "$end" ] ... continue</code>）：连不通/超时的域名兜住输出 [ERR] 而不是让脚本中断——安全工具"半途而废"等于没有监控。<br>
         <b>④</b> 定时化：crontab 每天一跑，输出追加日志或接 webhook —— 这就是证书过期事故（事件剧本 E3）的第一道防线，配套自动续期见追问链②。<br>
         <b>✅ 验收</b>：domains.txt 放 3 个真实域名一次跑出 3 行 OK/WARN；故意混入一个连不通的域名脚本不崩。
       </div></details>
