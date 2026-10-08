@@ -296,15 +296,28 @@ mkdir -p /root/lab/backup &amp;&amp; tar -xzf lab.tgz -C /root/lab/backup &amp;&
       <p><b>题 1（高频事故）</b>：某服务写不了日志，排查发现 /var/log 所在盘满了。要求：安全清理——<b>不许直接 rm 正在被写入的日志文件</b>（rm 了空间也不会释放）。怎么定位、怎么清？</p>
       <p>提示：想想"文件被删除但进程还开着"会怎样。</p>
       <details class="ans"><summary>操作要点</summary><div class="body">
-        ① <code>df -h</code> 确认哪个盘满 → <code>du -sh /* 2&gt;/dev/null | sort -rh | head</code> 找目录；② 找"已删未释放"的句柄：<code>lsof +L1</code>（在你的 ECS 上直接执行）；③ 安全清理：<code>truncate -s 0 文件名</code> 或 <code>: &gt; 文件名</code> 清空而不是删除；④ 根治：配 logrotate 做轮转+保留策略。
+        <b>①</b> 定位哪个盘满：<code>df -h</code> —— 预期看到某个挂载点 Use% 接近 100%（注意看挂载点列，/var/log 常在根盘或独立数据盘）。<br>
+        <b>②</b> 找大目录：<code>du -sh /* 2&gt;/dev/null | sort -rh | head</code> —— 逐层往下钻（如 /var → /var/log），预期锁定日志目录。<br>
+        <b>③</b> 抓"已删未释放"的文件：<code>lsof +L1 | head</code> —— 输出里列出已 deleted 但仍被进程占用的文件（这些 rm 了空间也不还）。<br>
+        <b>④</b> 安全清理（清空而不是删除）：<code>truncate -s 0 /var/log/xxx.log</code> 或 <code>: &gt; /var/log/xxx.log</code> —— 清完马上 <code>df -h</code> 复查，预期空间回来；被进程开着的文件千万别 rm。<br>
+        <b>⑤</b> 根治：给该服务配 logrotate（轮转+压缩+保留 N 份），避免下次再满。<br>
+        <b>✅ 验收</b>：清完后 df 空间恢复且服务继续正常写日志；能说出"为什么 rm 不释放空间"（inode 还被进程引用着）。
       </div></details>
       <p><b>题 2</b>：找出你电脑上最近 24 小时内被修改过的所有 .conf / .ini 配置文件（比如排查"谁改了配置"）。</p>
       <details class="ans"><summary>操作要点</summary><div class="body">
-        <code>find ~ -name "*.conf" -mtime -1 2&gt;/dev/null</code>；更精确用时间戳：<code>find ~ -name "*.conf" -newermt "24 hours ago"</code>。延伸：加 <code>-ls</code> 看修改时间与大小，配合 <code>diff</code> 对比备份判断改了什么。
+        <b>①</b> 基础版：<code>find ~ -name "*.conf" -mtime -1 2&gt;/dev/null</code> —— <code>-mtime -1</code> 即 24 小时内改动；预期只列出少量路径（结果太多说明搜索范围划大了）。<br>
+        <b>②</b> 多后缀+精确时间戳版：<code>find ~ \( -name "*.conf" -o -name "*.ini" \) -newermt "24 hours ago"</code> —— <code>-o</code> 组合两种后缀，时间写法更直观。<br>
+        <b>③</b> 带详情看：<code>find ~ -name "*.conf" -mtime -1 -ls 2&gt;/dev/null</code> —— 输出修改时间/大小，便于判断"什么时候改的、改了多大"。<br>
+        <b>④</b> 判断改了什么：拿备份对照 <code>diff 备份/xxx.conf 当前/xxx.conf</code>。<br>
+        <b>✅ 验收</b>：能对任意目录回答"最近一天哪些配置文件被动过"，并用 diff 给出具体改动。
       </div></details>
       <p><b>题 3</b>：本机 8080 端口被一个"不知道哪来的"进程占用，服务起不来。找出它并安全停掉。</p>
       <details class="ans"><summary>操作要点</summary><div class="body">
-        在 ECS 上：<code>ss -tlnp | grep 8080</code> 或 <code>lsof -i:8080</code> 直接看到进程名和 PID → <code>kill PID</code>。本机 Windows 对照：<code>netstat -ano | findstr :8080</code> + <code>taskkill /PID xxx</code>。安全原则：先确认是什么进程（别误杀关键服务）再停。
+        <b>①</b> 找占用者（ECS/Linux）：<code>ss -tlnp | grep 8080</code> 或 <code>lsof -i:8080</code> —— 预期输出进程名+PID（如 users:(("nginx",pid=1234))）。<br>
+        <b>②</b> 动手前先确认它是什么：<code>ps -fp PID</code> 看命令行 —— 安全原则：别误杀 sshd/mysqld 这类关键服务。<br>
+        <b>③</b> 优雅停止：<code>kill PID</code>（SIGTERM，等几秒）；赖着不动再 <code>kill -9 PID</code> —— 预期 <code>ss -tlnp | grep 8080</code> 无输出，端口空出。先 TERM 后 KILL 是给进程收尾/刷盘的机会。<br>
+        <b>④</b> Windows 本机对照：<code>netstat -ano | findstr :8080</code> 拿 PID → <code>tasklist | findstr 该PID</code> 看名字 → <code>taskkill /PID xxx</code>。<br>
+        <b>✅ 验收</b>：端口释放且你的服务能 bind 启动；能说出"为什么先 kill 再 kill -9"。
       </div></details>
     </div></details>
     <p class="ask">❓ 面试官追问链："服务器负载很高怎么排查？➜ load 高但 CPU 空闲，什么原因？（IO 等待）➜ 怎么确认是哪块盘/哪个进程在等？"</p>
@@ -370,15 +383,27 @@ echo "exit code: $?"</code></pre>
     <details class="vary"><summary>🧩 举一反三：3 道变式题</summary><div class="body">
       <p><b>题 1</b>：把磁盘阈值改成命令行参数：<code>./env_check.sh --disk-threshold 50</code>，不传参时用默认 85。</p>
       <details class="ans"><summary>操作要点</summary><div class="body">
-        <code>while [ $# -gt 0 ]; do case "$1" in --disk-threshold) DISK_THRESHOLD="$2"; shift 2;; *) echo "未知参数 $1"; exit 2;; esac; done</code>；进阶用 <code>getopts</code>。
+        <b>①</b> 在脚本开头（DISK_THRESHOLD=85 之后）插参数解析：<code>while [ $# -gt 0 ]; do case "$1" in --disk-threshold) DISK_THRESHOLD="$2"; shift 2;; *) echo "未知参数 $1"; exit 2;; esac; done</code>。<br>
+        <b>②</b> 验证传参生效：<code>./env_check.sh --disk-threshold 1</code> —— 预期磁盘行变 [WARN]（阈值 1% 几乎必超）。<br>
+        <b>③</b> 验证默认值：<code>./env_check.sh</code> 不带参 —— 预期仍按 85 跑（解析循环没碰到变量）。<br>
+        <b>④</b> 验证坏参数：<code>./env_check.sh --foo</code> —— 预期打印"未知参数"且 <code>echo $?</code> 为 2。<br>
+        <b>✅ 验收</b>：三种调用各有正确表现；进阶改写成 <code>getopts</code> 短参数版（-d 50）再对比两种写法的边界差异。
       </div></details>
       <p><b>题 2</b>：让脚本把每次结果写入 logs/ 目录（文件名带日期），并自动清理 7 天前的旧日志。</p>
       <details class="ans"><summary>操作要点</summary><div class="body">
-        输出重定向：<code>./env_check.sh &gt;&gt; logs/check_$(date +%F).log 2&gt;&amp;1</code>；清理：<code>find logs -name "check_*.log" -mtime +7 -delete</code>（放进脚本头部或 crontab）。
+        <b>①</b> 建日志目录：<code>mkdir -p ~/lab/logs</code>。<br>
+        <b>②</b> 追加式写日志：<code>./env_check.sh &gt;&gt; ~/lab/logs/check_$(date +%F).log 2&gt;&amp;1</code> —— <code>&gt;&gt;</code> 追加不覆盖，一天一个文件（%F 形如 2026-10-08）；预期 <code>cat</code> 该文件能看到带时间戳的巡检报告。<br>
+        <b>③</b> 旧日志清理（放脚本开头）：<code>find /root/lab/logs -name "check_*.log" -mtime +7 -delete 2&gt;/dev/null || true</code> —— <code>+7</code> 即 7 天前；坑：脚本有 set -e，find 报错会中断，所以兜 <code>|| true</code>。<br>
+        <b>④</b> 验证清理逻辑：<code>touch -d "10 days ago" ~/lab/logs/check_2020-01-01.log</code> 伪造旧文件再跑脚本 —— 预期它被删、今天的日志保留。<br>
+        <b>✅ 验收</b>：连跑两天出现两个日期文件；伪造的 10 天前文件被自动清掉。
       </div></details>
       <p><b>题 3</b>：让它每 20 分钟自动运行一次（你的 ECS 上配 crontab 即可），并把 WARN 行单独抓出来告警。</p>
       <details class="ans"><summary>操作要点</summary><div class="body">
-        在 ECS 上：<code>crontab -e</code> 加 <code>*/20 * * * * /root/lab/env_check.sh &gt;&gt; /root/lab/logs/cron.log 2&gt;&amp;1</code>；告警雏形：追加 <code>grep WARN</code> 结果后用 curl 发钉钉 webhook。这就是一次真实的"定时巡检"配置，直接写进简历。
+        <b>①</b> 写 crontab：<code>crontab -e</code> 加一行 <code>*/20 * * * * /root/lab/env_check.sh &gt;&gt; /root/lab/logs/cron.log 2&gt;&amp;1</code> —— <code>*/20</code> 即每 20 分钟；保存后 <code>crontab -l</code> 复核。<br>
+        <b>②</b> 验证真的在跑：等一个周期后 <code>tail -5 /root/lab/logs/cron.log</code> —— 预期出现新巡检输出；坑：cron 的 PATH 极简，脚本里命令尽量写绝对路径。<br>
+        <b>③</b> 告警雏形（包一层再判断），写 warn_run.sh：<code>OUT=$(/root/lab/env_check.sh); echo "$OUT" &gt;&gt; /root/lab/logs/cron.log; echo "$OUT" | grep -q WARN &amp;&amp; curl -s 钉钉webhook -H 'Content-Type: application/json' -d '{"msgtype":"text","text":{"content":"巡检出现 WARN"}}'</code> —— <code>grep -q</code> 无匹配返回非 0，<code>&amp;&amp;</code> 短路，只有出 WARN 才发。<br>
+        <b>④</b> 制造一次真告警：crontab 那行改成调 warn_run.sh，临时把阈值调成 1 等一个周期 —— 预期钉钉群收到消息，验证完改回。<br>
+        <b>✅ 验收</b>：cron.log 按周期增长；调低阈值后 20 分钟内钉钉收到 WARN。这就是一次真实的"定时巡检"配置，直接写进简历。
       </div></details>
     </div></details>
     <p class="ask">❓ 面试官追问链："不用现成工具，统计日志里 TOP10 IP？➜ 如果日志有 1G 怎么加速？➜ 统计结果和 AWK 一致性怎么保证？"</p>
@@ -433,17 +458,29 @@ docker rm -f mysite &amp;&amp; docker ps -a | head -5   # 注意 -a 才能看到
       <p><b>↔ 沙盘衔接</b>：技能 4/5/9 的实验全部跑在容器上；沙盘 S3 会把它升级成"打镜像上 K8s"。</p>
     </div></details>
     <details class="vary"><summary>🧩 举一反三：3 道变式题</summary><div class="body">
-      <p><b>题 1</b>：起一个带持久化配置的 Redis（追加日志写到宿主机目录），验证"容器重启数据不丢"。</p>
+      <p><b>题 1</b>：起一个带持久化配置的 Redis（追加日志写到宿主机目录），验证"容器删掉重建后数据不丢"。</p>
       <details class="ans"><summary>操作要点</summary><div class="body">
-        <code>docker run -d --name redis -p 6379:6379 -v ~/lab/redis:/data redis:7 redis-server --appendonly yes</code> → <code>docker exec redis redis-cli set k1 hello</code> → <code>docker restart redis</code> → <code>get k1</code> 仍为 hello。核心概念：<b>容器无状态，数据靠卷</b>。
+        <b>①</b> 准备宿主机目录：<code>mkdir -p ~/lab/redis</code> —— AOF 文件将落在这里，容器删了文件还在。<br>
+        <b>②</b> 起容器：<code>docker run -d --name redis -p 6379:6379 -v ~/lab/redis:/data redis:7 redis-server --appendonly yes</code> —— <code>--appendonly yes</code> 开 AOF 持久化，<code>-v</code> 把容器内 /data 挂到宿主机；预期 <code>docker ps</code> 里 redis 为 Up。<br>
+        <b>③</b> 写入测试数据：<code>docker exec redis redis-cli set k1 hello</code> —— 预期返回 <code>OK</code>。<br>
+        <b>④</b> 看落盘物证：<code>ls ~/lab/redis/appendonlydir/</code> —— 预期看到 <code>appendonly.aof.*</code> 系列文件（Redis 7 的多文件 AOF 目录），证明数据真写在宿主机。<br>
+        <b>⑤</b> 强验证：<code>docker rm -f redis</code> → 用②的原命令重建容器 → <code>docker exec redis redis-cli get k1</code> 仍返回 <code>"hello"</code>。坑：只用 <code>docker restart</code> 证明不了"数据靠卷"——restart 不删可写层，不挂 <code>-v</code> 数据照样不丢。<br>
+        <b>✅ 验收</b>：删容器重建后 k1 仍是 hello，且能指出宿主机上 AOF 文件的位置。核心概念：<b>容器无状态，数据靠卷</b>。
       </div></details>
       <p><b>题 2</b>：创建自定义网络，让两个 alpine 容器互相 ping 通（不暴露到宿主机端口）。</p>
       <details class="ans"><summary>操作要点</summary><div class="body">
-        <code>docker network create mynet</code> → 两个容器都加 <code>--network mynet</code> → 进容器用 <b>容器名</b>互相 ping（Docker 内置 DNS）。延伸：这就是 K8s Service 的雏形。
+        <b>①</b> 创建自定义网络：<code>docker network create mynet</code> —— 预期返回一串网络 ID，<code>docker network ls</code> 能看到 mynet（bridge 型）。<br>
+        <b>②</b> 起两个容器并都接入该网络（注意都不加 <code>-p</code>）：<code>docker run -d --name box1 --network mynet alpine sleep 3600</code>、<code>docker run -d --name box2 --network mynet alpine sleep 3600</code> —— 坑：alpine 没有常驻前台进程，不带 <code>sleep 3600</code> 容器会立即退出；预期 <code>docker ps</code> 两个容器均 Up。<br>
+        <b>③</b> 用容器名互 ping：<code>docker exec box1 ping -c 3 box2</code> —— 预期 <code>3 packets transmitted, 3 received, 0% packet loss</code>。自定义网络自带内置 DNS（容器名即主机名）；默认 bridge 没有这个 DNS、只能 ping IP——这正是要建自定义网络的原因。<br>
+        <b>④</b> 收尾清理：<code>docker rm -f box1 box2 &amp;&amp; docker network rm mynet</code>（题 3 还要用这对容器，做之前先别清）。<br>
+        <b>✅ 验收</b>：能用容器名（而非 IP）互 ping 通。延伸：这就是 K8s Service 的雏形——按名字访问而非 IP。
       </div></details>
       <p><b>题 3</b>：容器里没有 ping/curl 等工具，怎么排查网络？（模拟"生产容器啥都没装"）</p>
       <details class="ans"><summary>操作要点</summary><div class="body">
-        方案 A：临时装 <code>apk add curl</code>（alpine）或 <code>apt install -y curl</code>；方案 B（更专业）：用 <code>nicolaka/netshoot</code> 镜像挂同一网络做"旁路诊断"：<code>docker run --rm -it --network mynet nicolaka/netshoot</code>。
+        <b>①</b> 复现"啥都没装"（沿用题 2 的容器；已清理就按题 2 的②先重建）：<code>docker exec box1 curl box2</code> 报 <code>curl: not found</code> —— 精简镜像不带诊断工具是常态，不是故障。<br>
+        <b>②</b> 方案 A·临时装：<code>docker exec box1 apk add curl</code>（alpine；debian 系用 <code>apt update &amp;&amp; apt install -y curl</code>）—— 快，但污染容器、容器重建即失效；装完再 <code>curl box2</code> 若返回 connection refused，说明 DNS 和路由其实已通（"被拒绝"也等于"到达"）。<br>
+        <b>③</b> 方案 B·旁路诊断（更专业）：<code>docker run --rm -it --network mynet nicolaka/netshoot</code> —— netshoot 自带 ping/dig/curl/tcpdump 全套：先 <code>dig box2</code> 验证 DNS 解析出 IP，再 <code>ping -c 3 box2</code> 验证连通；业务容器零改动，最贴近生产做法。<br>
+        <b>✅ 验收</b>：两种方案各通一次，并能说出生产环境选 B 的理由（不动业务容器、工具齐全、用完即弃）。
       </div></details>
     </div></details>
     <p class="ask">❓ 面试官追问链："容器和虚拟机有什么区别？➜ 容器里 1 号进程挂了会怎样？➜ 镜像分层是什么，为什么能加速构建？"</p>
@@ -519,15 +556,26 @@ docker restart proxy &amp;&amp; curl -i --max-time 15 http://localhost:8082 | he
     <details class="vary"><summary>🧩 举一反三：3 道变式题</summary><div class="body">
       <p><b>题 1</b>：写一条命令/小脚本，检查任何域名的证书离到期还有多少天，少于 30 天就输出告警。<code>openssl s_client -connect 域名:443</code> 的 notAfter 怎么和今天比？</p>
       <details class="ans"><summary>操作要点</summary><div class="body">
-        <code>echo | openssl s_client -connect 域名:443 2&gt;/dev/null | openssl x509 -noout -enddate</code> 拿到 <code>notAfter=...</code> → 转成时间戳与 <code>date +%s</code> 相减得天数 → if 判断输出 WARN。这就是"证书到期监控"的最小实现（沙盘 S4 可升级为 Prometheus 告警）。
+        <b>①</b> 先手工拿一次到期时间：<code>echo | openssl s_client -connect baidu.com:443 2&gt;/dev/null | openssl x509 -noout -enddate</code> —— 预期输出 <code>notAfter=Dec  1 12:00:00 2026 GMT</code> 这样的行。<br>
+        <b>②</b> 组装成脚本 cert_check.sh（核心三行）：<code>end=$(date -d "$(echo | openssl s_client -connect $1:443 2&gt;/dev/null | openssl x509 -noout -enddate | cut -d= -f2)" +%s)</code>；<code>days=$(( (end - $(date +%s)) / 86400 ))</code>；<code>[ $days -lt 30 ] &amp;&amp; echo "[WARN] $1 剩 $days 天" || echo "[OK] $1 剩 $days 天"</code>。<br>
+        <b>③</b> 验证：<code>./cert_check.sh baidu.com</code> —— 预期 3 秒内输出一行剩余天数；把 30 临时改成 9999 能看到 WARN 分支。<br>
+        <b>④</b> 多域名+定时化：把 $1 换成 <code>for d in $(cat domains.txt)</code> 循环，挂 crontab 每天跑（技能 2 题 3 同款）——这就是"证书到期监控"的最小实现，沙盘 S4 可升级为 Prometheus 告警。<br>
+        <b>✅ 验收</b>：对任一 https 域名输出剩余天数，且 OK/WARN 两个分支都触发过一次。
       </div></details>
       <p><b>题 2</b>：观察一次真实网站的 HTTPS 全流程（如 <code>www.baidu.com:443</code>），指出证书链里有几级、由谁签发。</p>
       <details class="ans"><summary>操作要点</summary><div class="body">
-        <code>echo | openssl s_client -connect www.baidu.com:443 -showcerts 2&gt;/dev/null | grep -E "s:|i:"</code>，<code>s:</code> 是主体、<code>i:</code> 是签发者；从站点证书往上通常两级（中间CA→根CA）。延伸：根 CA 预装在系统里所以浏览器不报警。
+        <b>①</b> 抓证书链：<code>echo | openssl s_client -connect www.baidu.com:443 -showcerts 2&gt;/dev/null | grep -E "s:|i:"</code> —— 预期输出若干行，<code>s:</code>=主体（这张证书是谁）、<code>i:</code>=签发者（谁给它签的）。<br>
+        <b>②</b> 读链条：第一组 s:*.baidu.com / i:某中间 CA；第二组 s:中间CA / i:根CA —— 站点证书往上通常两级。坑：服务端一般只发到中间 CA，根 CA 不随链下发。<br>
+        <b>③</b> 解释"浏览器为什么不报警"：根 CA 预装在操作系统/浏览器信任库里，链能验证到信任锚即通过。反过来，服务端<b>漏发中间证书</b>是常见握手故障（客户端报 unable to get local issuer certificate）。<br>
+        <b>✅ 验收</b>：能对任意网站说出"几级、由谁签发"，并能讲出"漏发中间证书"这一故障模式。
       </div></details>
       <p><b>题 3</b>：解释并实验"DNS 劫持的影响"：把 hosts 里加一条把某域名指到本地，看看访问行为变化。</p>
       <details class="ans"><summary>操作要点</summary><div class="body">
-        编辑 <code>C:\Windows\System32\drivers\etc\hosts</code> 加 <code>127.0.0.1 demo.local</code> → 起本地 nginx 于 80 端口 → 浏览器访问 demo.local 命中本地。结论：DNS 解析顺序是 hosts 优先于 DNS 服务器——解释了为什么"改 hosts"是临时应急手段，以及线上故障要怀疑"解析被改/缓存污染"。
+        <b>①</b> 在 ECS 上改 hosts：<code>echo "127.0.0.1 demo.local" &gt;&gt; /etc/hosts</code> —— 系统解析顺序 hosts 优先于 DNS 服务器。<br>
+        <b>②</b> 验证劫持生效：<code>curl -s http://demo.local:8080 | head -1</code>（技能 3 的 web 容器）—— 预期返回你的自定义页面：请求根本没出本机，被 hosts 指到了 127.0.0.1。<br>
+        <b>③</b> 再造一次"解析被改"故障：临时 <code>echo "1.2.3.4 www.baidu.com" &gt;&gt; /etc/hosts</code> → <code>curl --max-time 5 -I http://www.baidu.com</code> —— 预期<b>超时</b>（被指向黑洞 IP）；<code>sed -i '/www.baidu.com/d' /etc/hosts</code> 清掉后恢复。<br>
+        <b>④</b> Windows 本机对照：管理员编辑 <code>C:\Windows\System32\drivers\etc\hosts</code> 同理，改完 <code>ipconfig /flushdns</code> 清本地 DNS 缓存才稳。<br>
+        <b>✅ 验收</b>：能解释"hosts 优先于 DNS"如何被用于应急（临时切流）与如何制造故障（解析被改/缓存污染），并把 hosts 恢复原样。
       </div></details>
     </div></details>
     <p class="ask">❓ 面试官追问链："502 和 504 的区别、各怎么排查？➜ HTTPS 握手过程说一遍？➜ 抓包看到大量 SYN_SENT 说明什么？"</p>
@@ -591,15 +639,27 @@ docker exec redis redis-cli set k1 hello &amp;&amp; docker exec redis redis-cli 
     <details class="vary"><summary>🧩 举一反三：3 道变式题</summary><div class="body">
       <p><b>题 1</b>：模拟 RPO 的真实体感：恢复完之后，又插入一条新订单，然后"再次误删+用同一份旧备份恢复"——新订单没了。算出你这次的数据丢失窗口是多少，并说清上岗后怎么向业务方交代。</p>
       <details class="ans"><summary>操作要点</summary><div class="body">
-        核心概念：RPO（恢复点目标）= 备份时间点到故障时间点之间的数据窗口。向业务方交代三件套：丢失窗口多长、是否有 binlog 可补（进阶：用 binlog 追增量）、以后如何缩短（提高备份频率/binlog 落地）。
+        <b>①</b> 按主实验恢复完成后，再插一条新订单：<code>docker exec mysql mysql -uroot -p'Keda@2026' -e "insert into kedadb.orders(item,amt) values('late',1);"</code> —— 此刻库里 4 行，但备份文件还是 3 行时的。<br>
+        <b>②</b> 再次误删并恢复：<code>drop database kedadb;</code> → 用同一份旧备份恢复 → <code>select count(*)</code> 只剩 3 行，'late' 那条没了。<br>
+        <b>③</b> 算丢失窗口：看备份文件的时间戳 <code>ls -l --time-style=+%F_%T ~/lab/kedadb_*.sql</code>，到 drop 那一刻的间隔就是本次 RPO（恢复点目标）——实验里几分钟，生产里=备份周期。<br>
+        <b>④</b> 向业务方交代三件套：丢失窗口多长、哪些数据受影响；有没有 binlog 可补增量（进阶：mysqlbinlog 回放到误删前）；以后如何缩短（提高备份频率/binlog 落地/上云 RDS 自动备份）。<br>
+        <b>✅ 验收</b>：能不看笔记说出 RPO 定义、现场算出本实验的丢失窗口，并复述"交代三件套"。
       </div></details>
       <p><b>题 2</b>：让 MySQL 数据"删容器也不丢"：把数据目录挂到宿主机，重建容器后数据仍在。</p>
       <details class="ans"><summary>操作要点</summary><div class="body">
-        <code>docker rm -f mysql</code> → 重新 run 时加 <code>-v ~/lab/mysql:/var/lib/mysql</code> → 重建后 <code>select count(*)</code> 数据还在。注意首次挂载目录权限（容器内 uid 999），必要时 <code>chmod 777</code> 演示后再讲正确做法（chown 999）。
+        <b>①</b> 确认现有数据：<code>docker exec mysql mysql -uroot -p'Keda@2026' -e "select count(*) from kedadb.orders;"</code>（3 行）。<br>
+        <b>②</b> 删容器并带卷重建：<code>docker rm -f mysql</code> → <code>docker run -d --name mysql -e MYSQL_ROOT_PASSWORD='Keda@2026' -p 3306:3306 -v ~/lab/mysql:/var/lib/mysql mysql:8.4</code> —— 数据目录挂到宿主机，和 Docker 题 1 的 Redis 同一招。<br>
+        <b>③</b> 验证：<code>sleep 20</code> 等就绪后重跑①的 select —— 预期仍 3 行，虽然容器已是"新的"。<br>
+        <b>④</b> 坑：首次挂载<b>空目录</b>时 MySQL 会初始化全新实例、旧数据看不见——所以要么从第一次 run 就带 <code>-v</code>，要么把旧数据目录拷进宿主机目录并 <code>chown -R 999:999 ~/lab/mysql</code>（容器内 mysql 用户是 uid 999；chmod 777 演示能跑，但别在面试里当正确答案）。<br>
+        <b>✅ 验收</b>：rm -f 后重建仍能查到旧数据；能讲清"为什么要从第一天就挂卷"。
       </div></details>
       <p><b>题 3</b>：给 <code>orders</code> 表的一条查询做"从全表扫描到走索引"的优化：<code>select * from orders where item='mug';</code> 先后用 EXPLAIN 对比。</p>
       <details class="ans"><summary>操作要点</summary><div class="body">
-        <code>EXPLAIN select ...</code> 看到 <code>type=ALL</code>（全表扫描）→ <code>create index idx_item on orders(item);</code> → 再 EXPLAIN 变为 <code>type=ref</code>。面试追问链里的"explain 重点看哪几列"此题已覆盖：type/key/rows/Extra。
+        <b>①</b> 看优化前执行计划：<code>docker exec mysql mysql -uroot -p'Keda@2026' -e "explain select * from kedadb.orders where item='mug';"</code> —— 预期 <code>type=ALL</code>、<code>key=NULL</code>、rows≈全表行数：全表扫描。<br>
+        <b>②</b> 加索引：<code>... -e "create index idx_item on kedadb.orders(item);"</code> —— 预期 Query OK。<br>
+        <b>③</b> 复查：再跑①的 explain —— 预期 <code>type=ref</code>、<code>key=idx_item</code>、rows 降到 1。想放大差异可先灌 10 万行（循环 insert）再对比两版查询耗时。<br>
+        <b>④</b> 面试落点：EXPLAIN 重点看 type（ALL→ref/range 越好）、key（用没用上索引）、rows（扫描量）、Extra（Using filesort / Using temporary 是红旗）。<br>
+        <b>✅ 验收</b>：前后两次 explain 各抄一行，能指着这四列说出变化含义。
       </div></details>
     </div></details>
     <p class="ask">❓ 面试官追问链："一条慢 SQL 怎么优化？➜ explain 里你重点看哪几列？➜ Redis 缓存穿透/击穿/雪崩的区别与对策？"</p>
@@ -667,15 +727,27 @@ python check_hosts.py</code></pre>
     <details class="vary"><summary>🧩 举一反三：3 道变式题</summary><div class="body">
       <p><b>题 1</b>：串行检查 20 个目标要 40 秒（每个超时 2 秒），改成并发后应在 2-3 秒内完成。</p>
       <details class="ans"><summary>操作要点</summary><div class="body">
-        <code>from concurrent.futures import ThreadPoolExecutor</code> → <code>with ThreadPoolExecutor(max_workers=10) as ex: results = list(ex.map(lambda r: check(*r), targets))</code>。核心认知：巡检类工具都是 IO 密集，并发靠线程池。
+        <b>①</b> 改造：顶部 <code>from concurrent.futures import ThreadPoolExecutor</code>，主循环换成 <code>with ThreadPoolExecutor(max_workers=10) as ex: results = list(ex.map(lambda r: check(*r), targets))</code>（targets=读出的清单）。<br>
+        <b>②</b> 把清单撑到 20 行（留几个 9999 坏端口），<code>time python check_hosts.py</code> 对比改造前后 —— 预期串行 ~40 秒 → 并发 2-3 秒，且 OK/FAIL 判定与串行版一致。<br>
+        <b>③</b> 认知点：巡检是 IO 密集（都在等连接/超时，CPU 闲着），线程池有效；若是 CPU 密集要换进程池。<br>
+        <b>④</b> 坑：ex.map 的结果顺序与提交顺序一致（可靠），但别依赖"谁先完成"；max_workers 不是越大越好（连接数、对端限流会反噬）。<br>
+        <b>✅ 验收</b>：20 目标 3 秒内出结果且判定与串行版一致，能说出线程池 vs 进程池的选择依据。
       </div></details>
       <p><b>题 2</b>：让工具输出 JSON 结果文件，并且"有任一不可达就退出码为 1"——这样能直接接进监控系统。</p>
       <details class="ans"><summary>操作要点</summary><div class="body">
-        <code>import json, sys</code>；结果写 <code>json.dump(results, open("result.json","w"))</code>；结尾 <code>sys.exit(0 if ok == len(rows) else 1)</code>。验证：<code>echo $?</code>。这就是"工具可被自动化消费"的工程习惯。
+        <b>①</b> 结果落 JSON：把 rows 改成字典列表（host/port/status/ms），结尾 <code>json.dump(results, open("result.json","w",encoding="utf-8"), ensure_ascii=False, indent=2)</code>。<br>
+        <b>②</b> 退出码联动：<code>import sys</code>，结尾 <code>sys.exit(0 if ok == len(rows) else 1)</code> —— 全可达 0，任一不可达 1。<br>
+        <b>③</b> 验证两件事：<code>python check_hosts.py; echo $?</code> —— 清单里有 9999 时预期 1，删掉后预期 0；<code>python -m json.tool result.json</code> 能美化打印即 JSON 合法。<br>
+        <b>④</b> 认知点：监控/调度系统不读你的打印文本，只认<b>退出码</b>和<b>结构化文件</b>——这是"工具可被自动化消费"的工程习惯。<br>
+        <b>✅ 验收</b>：坏目标存在时退出码 1、result.json 能被后续程序直接读取。
       </div></details>
       <p><b>题 3</b>：清单里混入一行坏数据（如 "localhost" 缺端口、空行），工具不能崩，要跳过并计入"格式错误"。</p>
       <details class="ans"><summary>操作要点</summary><div class="body">
-        解析处加防御：<code>try: host, port = row; except ValueError: bad += 1; continue</code>；跳过空行 <code>if not row: continue</code>。原则：<b>工具要对输入宽容、对输出严格</b>（坏行不影响整体巡检）。
+        <b>①</b> 先制造崩溃：往 hosts.csv 塞一行只有一列的 <code>localhost</code> 和一个空行 → <code>python check_hosts.py</code> —— 预期 <code>ValueError: not enough values to unpack</code>，工具挂掉。<br>
+        <b>②</b> 解析处加防御：循环里先 <code>if not row: continue</code>（跳空行），再 <code>try: host, port = row; except ValueError: bad += 1; continue</code>（坏行计数并跳过）。<br>
+        <b>③</b> 报告尾行加 <code>格式错误 {bad} 行</code> —— 好目标照常巡检，坏行不静默吞掉、要被看见。<br>
+        <b>④</b> 原则：<b>对输入宽容、对输出严格</b>——坏数据不拖垮整体任务，但必须计数/留痕；反面教材是 <code>except: pass</code> 一吞了之。<br>
+        <b>✅ 验收</b>：同一份带坏行的清单，改造前崩、改造后出完整报告且格式错误计数正确。
       </div></details>
     </div></details>
     <p class="ask">❓ 面试官追问链："你写过哪些自动化工具？➜ 工具怎么处理 100 台机器里 3 台连不上的异常？➜ 怎么防止脚本误操作生产？"</p>
@@ -739,15 +811,27 @@ kubectl patch svc web -p '{"spec":{"selector":{"app":"web"}}}'   # 修复</code>
     <details class="vary"><summary>🧩 举一反三：3 道变式题</summary><div class="body">
       <p><b>题 1</b>：故意把存活探针端口写错，观察 Pod 的命运与事件流，然后修复。</p>
       <details class="ans"><summary>操作要点</summary><div class="body">
-        <code>kubectl edit deployment web</code> 加 livenessProbe 指向 <code>port: 9999</code> → Pod 反复重启（CrashLoopBackOff 或 RESTARTS 增长）→ <code>describe</code> 的 Events 里看到 "Liveness probe failed" → 改回 80。认知点：<b>探针失败会杀掉容器，配置过严是常见事故源</b>。
+        <b>①</b> 注入坏探针：<code>kubectl patch deployment web -p '{"spec":{"template":{"spec":{"containers":[{"name":"web","livenessProbe":{"httpGet":{"path":"/","port":9999}}}]}}}}'</code> —— 把存活探针指到没人监听的 9999。<br>
+        <b>②</b> 观察命运：<code>kubectl get pods -w</code> —— 预期 RESTARTS 每 ~30 秒 +1（探针失败→kubelet 杀容器重启），状态可能进 CrashLoopBackOff。<br>
+        <b>③</b> 取证：<code>kubectl describe pod -l app=web | grep -B1 -A5 Events</code> —— Events 里有 <code>Liveness probe failed: ... connection refused</code>，这就是"端口写错"的铁证。<br>
+        <b>④</b> 修复：<code>kubectl rollout undo deployment/web</code> —— Pod 恢复 Running、RESTARTS 不再增长。<br>
+        <b>⑤</b> 认知点：<b>探针失败会杀容器重启，配置过严是常见事故源</b>；这一步还会触发技能 8 的 PodRestartingFrequently 告警，正好联动。<br>
+        <b>✅ 验收</b>：能只凭 describe 的 Events 说出"探针端口错"，并用 rollout undo 恢复。
       </div></details>
       <p><b>题 2</b>：把副本扩到 6 个，解释它们"调度"到了哪个节点、为什么（单节点集群也没关系，说出调度器的判断依据）。</p>
       <details class="ans"><summary>操作要点</summary><div class="body">
-        <code>kubectl scale deployment web --replicas=6</code> → <code>kubectl get pods -o wide</code> 看 NODE 列 → 调度依据：资源余量、污点/容忍、亲和性。单节点集群全落一个 node 上，说出"多节点时会公平分布"即达标。
+        <b>①</b> 扩容观察：<code>kubectl scale deployment web --replicas=6</code> → <code>kubectl get pods -o wide</code> —— 看 NODE 列：单节点 kind 集群预期 6 个 Pod 全落 lab-control-plane。<br>
+        <b>②</b> 说调度依据（面试点）：调度器给节点"打分"——资源余量（requests/limits 放不放得下）、污点/容忍、节点亲和与反亲和、拓扑打散；多节点时尽量分散而不是堆一台。<br>
+        <b>③</b> 加个观察维度：<code>kubectl describe nodes | grep -A6 "Allocated resources"</code> —— 看 requests 已占多少，理解"能不能调度上去"本质是资源维度的问题。<br>
+        <b>✅ 验收</b>：能回答"为什么全在一个节点"（只有一个可选）+"多节点时会怎么分布、凭什么"（打分维度）。
       </div></details>
       <p><b>题 3</b>：用 kubectl 进 Pod 内部验证"Service 在集群内可访问"（DNS 名直连）。</p>
       <details class="ans"><summary>操作要点</summary><div class="body">
-        起一个带 curl 的临时 Pod：<code>kubectl run tmp --rm -it --image=nicolaka/netshoot -- bash</code> → 里面 <code>curl http://web</code> 通 → 解释：集群 DNS 把 <code>web</code> 解析到 Service ClusterIP，再由 kube-proxy/iptables 转发到后端 Pod。这条链路就是 K8s 网络的核心。
+        <b>①</b> 起临时诊断 Pod：<code>kubectl run tmp --rm -it --image=nicolaka/netshoot -- bash</code> —— 进入一个带全套工具的 Pod，退出即自动删除。<br>
+        <b>②</b> 验证 DNS：<code>nslookup web</code> —— 预期解析出一个 ClusterIP（Service 的 IP，不是 Pod IP）。<br>
+        <b>③</b> 验证连通：<code>curl -s http://web | head -3</code> —— 预期返回 nginx 欢迎页；坑：curl 不通先 <code>kubectl get endpoints web</code>（技能 7 实验⑤的教训：selector 错配→Endpoints 为空）。<br>
+        <b>④</b> 讲链路（面试点）：CoreDNS 把 <code>web</code> 解析到 Service ClusterIP → kube-proxy/iptables 把流量负载均衡到后端 Pod——按名字访问、自动均衡，这就是 K8s 网络的核心抽象。<br>
+        <b>✅ 验收</b>：在 Pod 内 curl 通 Service 名，并能画出"DNS → ClusterIP → Endpoints(Pod)"三跳。
       </div></details>
     </div></details>
     <p class="ask">❓ 面试官追问链："Pod 无法启动怎么排查？➜ Events 里 ImagePullBackOff 和 CrashLoopBackOff 分别查什么？➜ Service 不通但 Pod 正常，从哪查起？（Endpoints）"</p>
@@ -825,15 +909,26 @@ kubectl rollout undo deployment/web
     <details class="vary"><summary>🧩 举一反三：3 道变式题</summary><div class="body">
       <p><b>题 1</b>：告警太吵：把上面的 for 从 1m 改成 5m、并加 labels 分组，说清"降噪"的原理和代价。</p>
       <details class="ans"><summary>操作要点</summary><div class="body">
-        <code>for</code> 越长误报越少但发现越晚（权衡）；Alertmanager 层再做 <code>group_by: [alertname, namespace]</code> 把同类合并。回答要带"误报率 vs 发现延迟"的权衡意识。
+        <b>①</b> 改规则：<code>kubectl -n monitoring edit prometheusrule my-first-rule</code> 把 <code>for: 1m</code> 改成 <code>for: 5m</code>，保存即生效（无需重启）。<br>
+        <b>②</b> 复跑实验④的坏探针，盯 Alerts 页：预期告警长时间停在 <code>Pending</code>（条件满足但未持续满 5m）——期间修复故障则整条告警从未 Firing。这就是降噪原理：<b>for 滤掉瞬时抖动</b>。<br>
+        <b>③</b> 代价要说出口：误报变少的同时<b>发现延迟变长</b>——真故障也要等满 for 才通知；for 的取值=业务能容忍的确认窗口，P0 类要短。<br>
+        <b>④</b> 分组降噪是另一层（Alertmanager）：<code>group_by: [alertname, namespace]</code> 把同类合并成一条，配 <code>group_wait/group_interval</code> 控节奏——和规则层的 for 是两层不同的手段，面试要分清。<br>
+        <b>✅ 验收</b>：能分别说清"for 降噪"与"group_by 降噪"各在哪一层、各自的代价是什么。
       </div></details>
       <p><b>题 2</b>：在 Grafana 建一个"业务大盘"：至少 3 个面板（web 的 Pod 数、CPU 使用、重启次数），并设一个阈值线。</p>
       <details class="ans"><summary>操作要点</summary><div class="body">
-        新建 Dashboard → Add panel → 数据源选 Prometheus → 查询分别用 <code>count(kube_pod_info{...})</code>、<code>rate(container_cpu_usage_seconds_total{namespace="default"}[5m])</code>、<code>restarts_total</code> → 阈值线用 panel 的 Thresholds 设置。
+        <b>①</b> 建盘：Grafana 左侧 Dashboards → New → Add panel，数据源选 Prometheus（kps 装好时已自动配好）。<br>
+        <b>②</b> 三个面板三条查询：Pod 数 <code>count(kube_pod_info{namespace="default"})</code>；CPU <code>rate(container_cpu_usage_seconds_total{namespace="default"}[5m])</code>；重启 <code>increase(kube_pod_container_status_restarts_total{namespace="default"}[10m])</code> —— 预期数值与 <code>kubectl get pods</code> 对得上。<br>
+        <b>③</b> 阈值线：panel 右侧 Thresholds 加一条（如重启 &gt; 2 标红）——图上出现分色底线，一眼看出越界。<br>
+        <b>④</b> 坑：用 namespace="default" 过滤自己实验的应用；面板标题写"人话"（如"web 服务重启次数"）——大盘是给值班看的，不是给自己看的。<br>
+        <b>✅ 验收</b>：三个面板同时有数据；制造一次重启（技能 7 题 1）后重启面板出现尖峰。
       </div></details>
       <p><b>题 3</b>：面试官问"你们的告警分级怎么定"——结合你刚做的规则，写一份分级草案（P0-P3 各一条例子+触达方式）。</p>
       <details class="ans"><summary>操作要点</summary><div class="body">
-        P0 全站不可用（电话+全员群，5 分钟内）；P1 核心功能受损/频繁重启（IM 群+值班 @，15 分钟）；P2 单实例异常/容量预警（工单，当天）；P3 趋势类（日报）。分级依据=影响面×紧急度，这是面试原题。
+        <b>①</b> 定标尺：分级依据=影响面×紧急度，先写定义再配例子（这是面试原题）。<br>
+        <b>②</b> 参考草案（每级一条实例）：P0 全站不可用——可用性探针全挂 → 电话+全员群，5 分钟内响应；P1 核心功能受损——Pod 频繁重启（你写的那条规则）→ IM 群+值班 @，15 分钟；P2 单实例异常/容量预警——磁盘 85% → 工单，当天处理；P3 趋势类——QPS 周比上涨 → 日报。<br>
+        <b>③</b> 闭环到自己的规则：把 <code>PodRestartingFrequently</code>（labels 已打 P1）挂进草案对应行，串起"规则→分级→触达"；产出物：一页《告警分级草案》进 GitHub。<br>
+        <b>✅ 验收</b>：能不假思索答出 P0-P3 各举一例+触达方式+响应时限，并说清定级的两个维度。
       </div></details>
     </div></details>
     <p class="ask">❓ 面试官追问链："搭过 Prometheus？➜ 告警规则怎么写的、分级依据是什么？➜ 告警风暴（一夜 200 条）怎么治？➜ 指标、日志、链路三支柱各解决什么问题、什么场景用哪个？"</p>
@@ -985,15 +1080,26 @@ for i in 1 2 3; do docker exec mq1 rabbitmqctl list_queues name messages | awk '
     <details class="vary"><summary>🧩 举一反三：3 道变式题</summary><div class="body">
       <p><b>题 1</b>：积压百万条的现实处置：消费者只能扩到"分区数"上限——为什么？如果分区数不够怎么办？</p>
       <details class="ans"><summary>操作要点</summary><div class="body">
-        同一消费者组内一个分区只能被一个消费者消费，所以有效并发上限=分区数；应急手段：临时加分区（如 3→9）、提升单消费者批量处理（batch 拉取）、修复卡住的消费者逻辑；根治：生产端限流+消费逻辑优化+监控 LAG 做告警。
+        <b>①</b> 原理（必答）：同一消费者组内<b>一个分区最多分给一个消费者</b>，所以有效并发上限=分区数；消费者数超过分区数，多出来的空转——这是分配机制，不是故障。<br>
+        <b>②</b> 在 lab 上亲眼看一次：<code>docker exec kafka /opt/kafka/bin/kafka-topics.sh --describe --topic orders --bootstrap-server localhost:9092</code> 看 PartitionCount: 3；开 4 个终端各跑一个同组消费者（<code>kafka-console-consumer.sh --group g1 ...</code>），再灌 100 条 —— 预期有一个消费者一条也收不到。<br>
+        <b>③</b> 分区不够怎么办（分层答）：应急——临时扩分区（3→9；注意<b>只增不减、会打破同 key 有序性</b>）或单消费者改批量拉取提吞吐；根治——生产端限流、消费逻辑优化（批量/异步/去掉慢 IO）、LAG 告警提前发现。<br>
+        <b>✅ 验收</b>：能白板画出"3 分区 × 4 消费者"的分配图并圈出空转的那个。
       </div></details>
       <p><b>题 2</b>：重复消费防护：用 <code>redis-cli setnx</code> 演示"消息幂等"的最小实现。</p>
       <details class="ans"><summary>操作要点</summary><div class="body">
-        <code>redis-cli set lock-msg-001 1 NX EX 3600</code> 返回 OK=首次处理；再执行一次返回 nil=已处理过，跳过。认知点：Kafka 至少一次投递语义下，幂等由业务侧兜住。
+        <b>①</b> 确保 redis 在跑（没有就 <code>docker run -d --name redis redis:7</code>），模拟收到消息 msg-001。<br>
+        <b>②</b> 第一次"消费"：<code>docker exec redis redis-cli set lock-msg-001 1 NX EX 3600</code> —— 预期返回 <code>OK</code>：抢到锁，执行业务逻辑。<br>
+        <b>③</b> 消息被重投、第二次"消费"：原样再执行一次 —— 预期返回 <code>(nil)</code>：已处理过，直接跳过——幂等达成。<br>
+        <b>④</b> 认知点：Kafka/RabbitMQ 的至少一次投递下"重复不可避免，幂等由业务侧兜住"；EX 3600 防止锁永不释放，TTL 要 ≥ 业务可容忍的重投窗口。<br>
+        <b>✅ 验收</b>：两次命令分别返回 OK 和 nil，能说出 NX、EX 各自的作用。
       </div></details>
       <p><b>题 3</b>：改 nginx 限流参数（rate=10r/s、burst=20），重跑连发实验，解释 503 数量的变化。</p>
       <details class="ans"><summary>操作要点</summary><div class="body">
-        <code>docker restart limiter</code> 后重测：rate 提高+burst 变大后 503 减少甚至消失——说明限流参数直接决定"放过多少突发流量"，线上要根据后端容量反推配置而不是拍脑袋。
+        <b>①</b> 改参数：<code>sed -i 's/rate=1r\/s/rate=10r\/s/; s/burst=3/burst=20/' /root/lab/nginx/limit.conf</code> 后 <code>docker restart limiter</code> —— 坑：配置是挂载进容器的，改宿主机文件+restart 即生效，不用重建容器。<br>
+        <b>②</b> 重跑连发：<code>for i in $(seq 1 10); do curl -s -o /dev/null -w "%{http_code} " http://localhost:8083; done; echo</code> —— 记得先记下改前（1r/s+burst=3）的输出作对照：约 6 个 503。<br>
+        <b>③</b> 解释变化：10 个请求落在 1 秒内，rate=10r/s + burst=20 足以全吸收 —— 预期 0 个 503（全 200）。限流参数直接决定"放过多少突发"，<b>线上要从后端容量反推</b>（压测出 QPS 上限再打折），不是拍脑袋。<br>
+        <b>④</b> 想再看 503：连发改 30 次，或 rate 调回 1r/s 重试。<br>
+        <b>✅ 验收</b>：能报出"改前 N 个 503、改后 0 个"的实测对比并解释原因。
       </div></details>
     </div></details>
     
@@ -1055,15 +1161,27 @@ curl -I http://你的公网IP        # 出现 200 就通了
     <details class="vary"><summary>🧩 举一反三：3 道变式题</summary><div class="body">
       <p><b>题 1</b>：把安全组 80 端口关掉，从本地访问网站，解释现象；再开回来。这个"片刻的打不开"就是线上事故的一种。</p>
       <details class="ans"><summary>操作要点</summary><div class="body">
-        控制台 → 安全组 → 删掉 80 入方向规则 → <code>curl --max-time 5 http://IP</code> 超时（注意：是超时/无响应，不是 502——因为包在云边界就被丢弃）。恢复规则后再通。认知点：<b>无响应 vs 应用错误，排查方向完全不同</b>。
+        <b>①</b> 记录基线：<code>curl -I http://你的公网IP</code> —— 预期 200，先确认现在是通的。<br>
+        <b>②</b> 关门：控制台 → ECS → 安全组 → 删除 80 端口入方向规则（几秒内生效）。<br>
+        <b>③</b> 观察现象：<code>curl --max-time 5 -I http://你的公网IP</code> —— 预期<b>超时</b>（无响应），不是 502——因为包在云边界就被丢弃，根本没到 nginx。"无响应 vs 应用错误"是排查方向分叉点：前者查网络路径/安全组，后者查应用与后端。<br>
+        <b>④</b> 恢复：把规则加回去（协议 TCP、端口 80、源 0.0.0.0/0），curl 复验 200。这"片刻的打不开"就是线上事故的一种形态。<br>
+        <b>✅ 验收</b>：能说出超时与 502 的本质区别和各自排查入口；确认规则已还原。
       </div></details>
       <p><b>题 2</b>：画出"本地 Docker 网络 vs 云上 VPC"的对照图，标出各层的"防火墙"在哪。</p>
       <details class="ans"><summary>操作要点</summary><div class="body">
-        Docker：容器网络(bridge) → 宿主机端口映射(-p) → Windows 防火墙；云上：VPC/子网 → 安全组(实例级) → 系统内 iptables。产出物：一张对照图（面试讲"云上 vs 本地"时直接用）。
+        <b>①</b> 画本地 Docker 侧：容器网络（bridge/自定义网络+内置 DNS）→ 端口映射 <code>-p</code>（NAT，第一道门：不映射就不通）→ 宿主机防火墙（ECS 上安全组在这层之前）。<br>
+        <b>②</b> 画云上 VPC 侧：VPC/交换机（子网、私网互通边界）→ 安全组（实例级、有状态）→ 系统内 iptables/firewalld → 应用监听端口。<br>
+        <b>③</b> 让一条请求逐层过闸：外网流量 → 安全组 → iptables → 端口映射 → 容器；本地对照：外部 → 宿主机防火墙 → -p 映射 → 容器。两个模型"门"的位置不同，但都是逐层收窄。<br>
+        <b>④</b> 产出物：一张对照图（截图/手绘均可），面试讲"云上 vs 本地"时直接用。坑：别把安全组说成"VPC 边界的墙"——它是挂在实例/弹性网卡上的。<br>
+        <b>✅ 验收</b>：能对着一台 ECS 说清"一个外部请求要过哪几道门才到容器里的 nginx"。
       </div></details>
       <p><b>题 3</b>：给 ECS 配一条云监控告警：CPU &gt; 80% 持续 5 分钟，验证收到的通知长什么样。</p>
       <details class="ans"><summary>操作要点</summary><div class="body">
-        控制台 → 云监控 → 报警规则 → 选 ECS 实例 → CPU 使用率阈值 80%、持续 5 分钟 → 通知方式选短信/邮件。想验证真报警：SSH 上去跑 <code>yes &gt; /dev/null &amp;</code> 制造 CPU 负载，等 5-10 分钟。这就是云上"第一层监控"。
+        <b>①</b> 建规则：控制台 → 云监控 → 报警规则 → 创建：资源选你的 ECS 实例，指标 CPU 使用率，阈值 &gt; 80% 持续 5 分钟，通知方式短信+邮件。<br>
+        <b>②</b> 制造真实负载：SSH 上去 <code>yes &gt; /dev/null &amp;</code>（打满一核；多核多开几个）→ <code>top</code> 确认 CPU ~100%。<br>
+        <b>③</b> 等通知：约 5-10 分钟收到短信/邮件 —— 记下通知内容长什么样：实例 ID、指标、当前值、持续时间、控制台链接。<br>
+        <b>④</b> 收尾：<code>kill %1</code> 停掉负载。认知点：云监控是"第一层监控"（免部署、指标粗），自建 Prometheus 是"第二层"（细粒度、可自定义）——生产两层都要有。<br>
+        <b>✅ 验收</b>：真收到过一条云监控报警通知，并能对照技能 8 说出云监控与自建监控的分工。
       </div></details>
     </div></details>
     <p class="ask">❓ 面试官追问链："设计一个跨可用区高可用业务？➜ SLB 健康检查配错了会怎样？➜ 安全组和 ACL 的区别？"</p>
@@ -1110,15 +1228,26 @@ sudo lynis audit system | tail -20</code></pre>
     <details class="vary"><summary>🧩 举一反三：3 道变式题</summary><div class="body">
       <p><b>题 1</b>：写一个"证书到期监控"小脚本（复用技能 4 的 openssl 命令）：给一个域名列表，输出每个证书剩余天数，&lt;30 天标 WARN。</p>
       <details class="ans"><summary>操作要点</summary><div class="body">
-        <code>echo | openssl s_client -connect $domain:443 2&gt;/dev/null | openssl x509 -noout -enddate</code> → 解析出日期 → 与 <code>date +%s</code> 相减除 86400 得天。列表循环+WARN 输出，这就是证书过期事故的第一道防线（E3 的预防手段）。
+        <b>①</b> 单域名先跑通（复用技能 4 题 1 的换算）：拿 notAfter → <code>date -d</code> 转 epoch → 与 <code>date +%s</code> 相减除 86400 得剩余天数。<br>
+        <b>②</b> 组装列表版 cert_watch.sh：<code>for d in $(cat domains.txt); do ... ; [ "$days" -lt 30 ] &amp;&amp; echo "[WARN] $d 剩 ${days} 天" || echo "[OK] $d 剩 ${days} 天"; done</code>；domains.txt 每行一个域名（公司/项目的域名都放进去）。<br>
+        <b>③</b> 边界处理：连不通/超时的域名要兜住输出 [ERR] 而不是让脚本中断——安全工具"半途而废"等于没有监控。<br>
+        <b>④</b> 定时化：crontab 每天一跑，输出追加日志或接 webhook —— 这就是证书过期事故（事件剧本 E3）的第一道防线，配套自动续期见追问链②。<br>
+        <b>✅ 验收</b>：domains.txt 放 3 个真实域名一次跑出 3 行 OK/WARN；故意混入一个连不通的域名脚本不崩。
       </div></details>
       <p><b>题 2</b>：给 Docker 容器做最小权限：让它以非 root 用户运行，并尝试 read-only 根文件系统。</p>
       <details class="ans"><summary>操作要点</summary><div class="body">
-        <code>docker run --rm --user 1000:1000 alpine id</code> 验证用户；<code>--read-only</code> 启动后容器内写文件将失败（需要写的地方用 --tmpfs 挂）。认知点：容器逃逸的第一层加固就是"进程权限最小化"。
+        <b>①</b> 非 root 验证：<code>docker run --rm alpine id</code> 默认是 root；<code>docker run --rm --user 1000:1000 alpine id</code> —— 预期 <code>uid=1000 gid=1000</code>：容器内不必用 root。<br>
+        <b>②</b> 对照"root 能干而普通用户不能干的事"：<code>docker run --rm alpine touch /etc/xx</code> 成功；加 <code>--user 1000:1000</code> 再试 —— 预期 <code>Permission denied</code>：进程权限小了，被攻破后的破坏面也小。<br>
+        <b>③</b> 只读根文件系统：<code>docker run --rm --read-only alpine touch /tmp/x</code> —— 预期 <code>Read-only file system</code>；确需写的位置用 <code>--tmpfs /tmp</code> —— 预期 touch 成功且容器退出即消失。<br>
+        <b>④</b> 认知点：容器安全第一层=进程权限最小化（非 root+只读+cap 裁剪）；镜像默认跑什么用户看 Dockerfile 的 USER 指令。<br>
+        <b>✅ 验收</b>：三组对照命令各跑一遍，能说出每条命令"证明了什么"。
       </div></details>
       <p><b>题 3</b>：等保视角自查：对照 CIS/NIST 挑 5 个人工能查的项目（如口令策略、日志审计），给你的 ECS 打一份"体检评分表"。</p>
       <details class="ans"><summary>操作要点</summary><div class="body">
-        推荐 5 项：①是否有登录审计日志（<code>last</code>/auditd）②口令复杂度 ③开放端口清单（<code>ss -tlnp</code>）④自动更新开关 ⑤敏感文件权限（<code>ls -l /etc/shadow</code> 应 640）。输出一张表：检查项/现状/结论/建议——这就是"合规自查报告"最小版。
+        <b>①</b> 五个可人工核查项及命令：登录审计 <code>last | head -5</code>；口令策略 <code>grep -E 'minlen|minclass' /etc/security/pwquality.conf</code>；开放端口 <code>ss -tlnp</code>（逐个问自己"该开吗"）；自动更新 <code>systemctl is-enabled unattended-upgrades</code>；敏感文件权限 <code>ls -l /etc/shadow</code>（预期 640 或 000、root:shadow）。<br>
+        <b>②</b> 对照基线：每项对照 CIS Benchmark 对应条目，给 符合/不符合/不适用 三态——"不适用"也要写理由（如容器化部署不适用某项）。<br>
+        <b>③</b> 产出物：一张《体检评分表》：检查项/现状（命令输出摘要）/结论/建议——这就是"合规自查报告"最小版，与 Lynis 的 Hardening index 互相印证。<br>
+        <b>✅ 验收</b>：5 项都有"命令输出+结论"，其中至少 1 项给出修复动作。
       </div></details>
     </div></details>
     <p class="ask">❓ 面试官追问链："生产环境漏修流程怎么闭环？➜ 证书快过期了怎么提前发现、怎么自动化续期？➜ 堡垒机是怎么实现会话审计的？"</p>
@@ -1165,15 +1294,27 @@ python check_hosts.py --timeout 1     # 参数生效？输出文件有了吗？
     <details class="vary"><summary>🧩 举一反三：3 道变式题</summary><div class="body">
       <p><b>题 1</b>：让 AI 写一段"删除 7 天前日志"的脚本——观察它是否会写出危险的 <code>rm -rf</code>，然后加固它（dry-run/白名单/路径校验）。</p>
       <details class="ans"><summary>操作要点</summary><div class="body">
-        典型输出：<code>find /var/log -mtime +7 -delete</code>（没毛病）或危险的 <code>rm -rf /var/log/*</code>（危险）。加固三点：加 <code>--dry-run</code> 先打印、路径写绝对白名单、加 <code>set -euo pipefail</code>。输出物：你的「AI 命令审查清单」（≥5 条），这本身就是面试亮点。
+        <b>①</b> 让 AI 写：prompt 给"写一个删除 7 天前日志的 shell 脚本" —— 典型输出两种：<code>find /var/log -mtime +7 -delete</code>（较稳）或 <code>rm -rf /var/log/*</code>（危险：通配+无确认+写死路径）。先自己标出危险点再继续。<br>
+        <b>②</b> 让 AI 按三条加固重写：加 <code>--dry-run</code>（先打印将删什么、不真删）；路径写<b>绝对白名单</b>（只允许 /var/log/app 下的 *.log，变量拼路径要判空）；加 <code>set -euo pipefail</code>（出错即停）。<br>
+        <b>③</b> 验证：测试目录里造几个新旧文件，先 dry-run 看清单、再真跑 —— 确认只删了该删的。<br>
+        <b>④</b> 产出物：《AI 命令审查清单》≥5 条（如"出现 rm -rf 必须人工确认""路径必须白名单""必须可 dry-run"）——这本身就是面试亮点。<br>
+        <b>✅ 验收</b>：加固版 dry-run 输出与实删结果一致；审查清单成文可复用。
       </div></details>
       <p><b>题 2</b>：模拟 S10：把一条真实报错日志（从技能 7/8 的排障里挑）喂给 AI，要求"给出 3 个可能原因 + 每个原因的验证命令"。</p>
       <details class="ans"><summary>操作要点</summary><div class="body">
-        例如把 CrashLoopBackOff 的日志喂进去 → AI 给出 OOM/配置错/探针过严等假设+验证命令。关键动作：<b>逐条验证它的假设</b>（AI 给的是假设不是结论），把验证过程记下来——这就是"LLM 辅助排障"的正确姿势。
+        <b>①</b> 挑一条你亲手造过的报错（技能 7 的 ImagePullBackOff/CrashLoopBackOff 的 describe 输出或 docker logs），原文喂给 AI，prompt 模板："这是 K8s 生产报错。给出 3 个可能原因，每个附一条验证命令，按可能性排序。"<br>
+        <b>②</b> 拿到假设先定性：AI 给的是<b>假设不是结论</b>——按"我能不能 2 分钟内验证"排序，逐条跑它给的命令（如 <code>kubectl describe pod ... | grep -A5 Events</code>、<code>kubectl logs --previous</code>）。<br>
+        <b>③</b> 记录验证过程：假设 → 验证命令 → 实际输出 → 成立/排除，最终定位真因（你事先知道答案，正好核对 AI 排序准不准）。<br>
+        <b>④</b> 产出物：一份《LLM 辅助排障记录》——面试答"怎么用 AI 提升运维效率"时，这就是带证据的例子。<br>
+        <b>✅ 验收</b>：完成"喂日志→3 假设→逐条验证→定位"全流程一次，并标注 AI 哪条假设是错的。
       </div></details>
       <p><b>题 3</b>：对比实验：同一个脚本需求分别用"一句话 prompt"和"结构化 prompt（背景+约束+验收标准）"让 AI 生成，比较质量差异。</p>
       <details class="ans"><summary>操作要点</summary><div class="body">
-        结构化模板：角色（你是资深 SRE）→ 背景（脚本用途/运行环境）→ 约束（纯标准库/必须防误操作/输出 JSON）→ 验收（给出测试方法）。产出一张"prompt 前后对比"记录——Prompt 工程能力是 JD 明写的加分项。
+        <b>①</b> 同一需求跑两版：一句话版"写个检查服务器磁盘的脚本"；结构化版按模板——角色（资深 SRE）→ 背景（Ubuntu 22.04、root、cron 里跑）→ 约束（纯标准库/阈值可配/坏输入不崩）→ 验收（给出测试方法与预期输出）。<br>
+        <b>②</b> 对比维度：是否处理边界（阈值/坏输入）、能否直接进 cron、注释与日志是否规范、给不给验证方法 —— 预期结构化版全面胜出。<br>
+        <b>③</b> 迭代一轮：对一句话版追加追问补齐（"加阈值参数""加异常处理"），体会"返工次数"也是成本。<br>
+        <b>④</b> 产出物：一张前后对比记录（需求、两版输出要点、返工次数、最终质量）——Prompt 工程能力是 JD 明写的加分项。<br>
+        <b>✅ 验收</b>：能拿着对比记录讲清"结构化 prompt 为什么省时间"（一次到位 vs 多轮返工）。
       </div></details>
     </div></details>
     <p class="ask">❓ 面试官追问链："你怎么用 AI 提升运维效率、举个实际例子？➜ AI 给的命令你怎么保证不把生产打挂？➜ 告警交给大模型分析，准确率怎么验证？"</p>
